@@ -691,11 +691,18 @@ resolve_taxa_filters <- function(sqm, requested_taxa) {
   tax_table <- as.data.frame(sqm$orfs$tax, check.names = FALSE)
   tax_columns <- intersect(all_taxonomy_columns, colnames(tax_table))
 
+  if (is.null(rownames(tax_table)) || anyDuplicated(rownames(tax_table)) > 0L) {
+    stop("ORF taxonomy must have unique row names for taxon filtering.", call. = FALSE)
+  }
+
   map(requested_taxa, function(requested_taxon) {
-    taxon_lower <- tolower(requested_taxon)
+    taxon_lower <- tolower(trimws(requested_taxon))
     matched_ranks <- tax_columns[vapply(
       tax_columns,
-      function(rank) any(tolower(as.character(tax_table[[rank]])) == taxon_lower, na.rm = TRUE),
+      function(rank) {
+        tax_values <- tolower(trimws(as.character(tax_table[[rank]])))
+        any(tax_values == taxon_lower, na.rm = TRUE)
+      },
       logical(1)
     )]
 
@@ -714,24 +721,49 @@ resolve_taxa_filters <- function(sqm, requested_taxa) {
       )
     }
 
+    matched_rank <- matched_ranks[[1]]
+    rank_values <- tolower(trimws(as.character(tax_table[[matched_rank]])))
+    orf_ids <- rownames(tax_table)[!is.na(rank_values) & rank_values == taxon_lower]
+
     list(
       taxon = requested_taxon,
-      rank = matched_ranks[[1]]
+      rank = matched_rank,
+      orf_ids = orf_ids
     )
   })
 }
 
-subset_sqm_by_taxon <- function(sqm, rank, taxon) {
-  SQMtools::subsetTax(
+subset_sqm_by_taxon <- function(
+  sqm,
+  orf_ids,
+  subset_orfs_fn = SQMtools::subsetORFs
+) {
+  if (length(orf_ids) == 0L || anyNA(orf_ids) || anyDuplicated(orf_ids) > 0L) {
+    stop("Taxon filtering requires a non-empty set of unique ORF IDs.", call. = FALSE)
+  }
+
+  subset_sqm <- subset_orfs_fn(
     SQM = sqm,
-    rank = rank,
-    tax = taxon,
+    orfs = orf_ids,
+    tax_source = "orfs",
     trusted_functions_only = FALSE,
     ignore_unclassified_functions = TRUE,
     rescale_tpm = FALSE,
     rescale_copy_number = FALSE,
-    recalculate_bin_stats = FALSE
+    recalculate_bin_stats = FALSE,
+    contigs_override = NULL,
+    allow_empty = FALSE
   )
+
+  actual_orf_ids <- rownames(subset_sqm$orfs$table)
+  if (!identical(actual_orf_ids, orf_ids)) {
+    stop(
+      "ORF subset postcondition failed: requested and returned ORF IDs differ.",
+      call. = FALSE
+    )
+  }
+
+  subset_sqm
 }
 
 # Build the canonical ORF × sample × KO table used by functional and flow plots.
@@ -2584,7 +2616,7 @@ main <- function() {
     resolved_taxa <- resolve_taxa_filters(sqm, requested_taxa)
     map(resolved_taxa, function(taxon_info) {
       progress_message("Applying taxon filter: ", taxon_info$taxon, " @ ", taxon_info$rank)
-      filtered_sqm <- subset_sqm_by_taxon(sqm, taxon_info$rank, taxon_info$taxon)
+      filtered_sqm <- subset_sqm_by_taxon(sqm, taxon_info$orf_ids)
       validate_sqm_object(filtered_sqm)
       list(
         sqm = filtered_sqm,
