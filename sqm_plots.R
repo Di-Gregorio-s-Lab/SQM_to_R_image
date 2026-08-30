@@ -1097,9 +1097,32 @@ get_ko_name_lookup <- function(pathway_sqm) {
 
 extract_ko_ec_lookup <- function(orf_long) {
   orf_long |>
-    distinct(.data$ko_id, .data$ec_codes) |>
+    transmute(
+      ko_id = as.character(.data$ko_id),
+      ec_code = str_split(as.character(.data$ec_codes), ";")
+    ) |>
+    tidyr::unnest_longer("ec_code", keep_empty = TRUE) |>
+    mutate(
+      ec_code = trimws(as.character(.data$ec_code)),
+      ec_code = if_else(
+        is.na(.data$ec_code) | !nzchar(.data$ec_code),
+        NA_character_,
+        .data$ec_code
+      )
+    ) |>
     group_by(.data$ko_id) |>
-    summarise(ec_codes = first(stats::na.omit(.data$ec_codes)), .groups = "drop")
+    summarise(
+      ec_codes = {
+        distinct_codes <- sort(unique(stats::na.omit(.data$ec_code)))
+        if (length(distinct_codes) == 0L) {
+          NA_character_
+        } else {
+          paste(distinct_codes, collapse = ";")
+        }
+      },
+      .groups = "drop"
+    ) |>
+    arrange(.data$ko_id)
 }
 
 get_ko_dir_name <- function(ko_id, ko_ec) {
@@ -1125,6 +1148,7 @@ validate_percent_sum <- function(data, group_col, value_col, tolerance = 1e-6, e
 }
 
 build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup) {
+  ko_ec_lookup <- extract_ko_ec_lookup(orf_long)
   summary_tbl <- orf_long |>
     filter(.data$sample %in% selected_samples) |>
     group_by(.data$sample, .data$ko_id) |>
@@ -1200,6 +1224,42 @@ build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup)
         0
       )
     )
+
+  metadata_keys <- plot_tbl |>
+    transmute(
+      sample = as.character(.data$sample),
+      ko_id = as.character(.data$ko_id)
+    )
+  metadata_mass <- plot_tbl |>
+    group_by(.data$sample) |>
+    summarise(tpm = sum(.data$tpm), .groups = "drop") |>
+    arrange(.data$sample)
+  plot_tbl <- plot_tbl |>
+    select(-"ec_codes") |>
+    left_join(
+      ko_ec_lookup,
+      by = "ko_id",
+      relationship = "many-to-one"
+    ) |>
+    mutate(
+      ec_codes = if_else(.data$ko_id == "Other", NA_character_, .data$ec_codes)
+    )
+  joined_keys <- plot_tbl |>
+    transmute(
+      sample = as.character(.data$sample),
+      ko_id = as.character(.data$ko_id)
+    )
+  joined_mass <- plot_tbl |>
+    group_by(.data$sample) |>
+    summarise(tpm = sum(.data$tpm), .groups = "drop") |>
+    arrange(.data$sample)
+  if (
+    nrow(plot_tbl) != nrow(metadata_keys) ||
+      !identical(joined_keys, metadata_keys) ||
+      !isTRUE(all.equal(joined_mass, metadata_mass, tolerance = 1e-10, check.attributes = FALSE))
+  ) {
+    stop("FUNZ EC metadata join changed row keys or TPM mass.", call. = FALSE)
+  }
 
   validate_percent_sum(plot_tbl, "sample", "sample_pathway_percent")
 
@@ -1936,6 +1996,15 @@ make_pathway_taxonomy_percent_plot <- function(
 
 build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name, top_n_taxa) {
   rank_sym <- rlang::sym(rank_name)
+  ko_ec_lookup <- extract_ko_ec_lookup(orf_long)
+  ko_ec <- ko_ec_lookup |>
+    filter(.data$ko_id == ko_id_filter) |>
+    pull(.data$ec_codes)
+  if (length(ko_ec) == 0L) {
+    ko_ec <- NA_character_
+  } else {
+    ko_ec <- ko_ec[[1L]]
+  }
 
   base_tbl <- orf_long |>
     filter(.data$sample == sample_name, .data$ko_id == ko_id_filter) |>
@@ -1972,6 +2041,9 @@ build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name
 
   plot_tbl |>
     mutate(
+      sample = sample_name,
+      ko_id = ko_id_filter,
+      ec_codes = ko_ec,
       total_tpm = sum(.data$tpm),
       pct = if_else(.data$total_tpm > 0, .data$tpm / .data$total_tpm, 0),
       label = if_else(.data$pct >= 0.03, as.character(.data$taxon_rank), ""),
@@ -2844,10 +2916,11 @@ run_pie_mode <- function(
           new_manifest_row(
             script_name = script_name,
             project_dir = project_dir,
-            tax_mode = tax_mode,
-            pathway = pathway_name,
-            ko_id = ko_id_value,
-            pathway_id = pathway_id,
+          tax_mode = tax_mode,
+          pathway = pathway_name,
+          ec_code = ko_ec,
+          ko_id = ko_id_value,
+          pathway_id = pathway_id,
             samples = sample_name,
             metric = "tpm",
             top_n_taxa = top_n_taxa,
@@ -2884,10 +2957,11 @@ run_pie_mode <- function(
             new_manifest_row(
               script_name = script_name,
               project_dir = project_dir,
-              tax_mode = tax_mode,
-              pathway = pathway_name,
-              ko_id = ko_id_value,
-              pathway_id = pathway_id,
+            tax_mode = tax_mode,
+            pathway = pathway_name,
+            ec_code = ko_ec,
+            ko_id = ko_id_value,
+            pathway_id = pathway_id,
               samples = sample_name,
               metric = "tpm",
               top_n_taxa = top_n_taxa,
