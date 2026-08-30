@@ -60,7 +60,7 @@ Fonti di verita' da usare durante la correzione:
 
 ### BUG-P0-01: mappature KEGG errate nei pathway curati
 
-Severita': critica. Stato: verificato.
+Severita': critica. Stato: corretto e verificato su `fix/p0-correctness` (2026-08-30).
 
 Riferimenti:
 
@@ -101,7 +101,7 @@ Test di regressione:
 
 ### BUG-P0-02: percentuali tassonomiche per pathway con denominatore sbagliato
 
-Severita': critica. Stato: verificato.
+Severita': critica. Stato: corretto e verificato su `fix/p0-correctness` (2026-08-30).
 
 Riferimenti:
 
@@ -134,7 +134,7 @@ Test di regressione:
 
 ### BUG-P0-03: filtro taxon risolto sulle ORF ma applicato tramite contig
 
-Severita': critica. Stato: verificato.
+Severita': critica. Stato: corretto e verificato su `fix/p0-correctness` (2026-08-30).
 
 Riferimenti:
 
@@ -171,6 +171,24 @@ Test di regressione:
 
 - Su `Bacillota`, gli ID ORF nel subset devono coincidere esattamente con gli ID ORF che hanno `phylum == "Bacillota"` in `sqm$orfs$tax`.
 - Nessuna ORF fuori taxon inclusa; nessuna ORF del taxon esclusa.
+
+## Evidenza di chiusura P0 - 2026-08-30
+
+Checkpoint GREEN:
+
+- `827922a`: mapping KEGG ufficiali e gate Pathview con ID valido;
+- `8c71f94`: filtro tassonomico applicato agli ID ORF esatti;
+- `9e96d1a`: percentuali tassonomiche pathway/sample calcolate dai TPM ORF.
+
+Verifiche osservate:
+
+- `tests/run_fast_tests.R`: 7 file di test completati, exit `0`;
+- `tests/check_p0_coverage.R`: gate `covr` 3.6.5 superato; copertura funzioni P0 tra 84.21% e 100%, baseline informativa dell'intero script 10.71%;
+- `tests/test_p0_integration_Au_sip.R`: exit `0`, 88258 ORF Bacillota restituite senza inclusioni o esclusioni, tre sample del pathway `00361` con somma percentuale 100;
+- run CLI mirata in `out/p0_candidate_20260830_01`: exit `0`; il TSV percentuale pathway contiene denominatore, stato e flag `plotted`, con somma 100 per `S13_1_8`, `S13_2_8` e `S13_3_8`;
+- review indipendente: nessun rilievo CRITICAL/HIGH.
+
+Limitazione non-P0 riconfermata dalla run candidata: sul lungo percorso Windows del workspace il nome del PNG pathway e' stato troncato e il target previsto nel manifest non esiste. Il difetto resta sotto BUG-P3-01/portabilita' degli output; non altera il TSV e le invarianti scientifiche usate per chiudere P0, ma impedisce di considerare l'intera directory candidata un output finale approvato.
 
 ## P1 - Correggere subito dopo
 
@@ -426,7 +444,7 @@ Test di regressione:
 
 ### BUG-P3-03: `pathview_is_exportable("defined", NA)` restituisce true
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto insieme a BUG-P0-01 su `fix/p0-correctness` (2026-08-30).
 
 Riferimenti:
 
