@@ -1147,15 +1147,32 @@ validate_percent_sum <- function(data, group_col, value_col, tolerance = 1e-6, e
   }
 }
 
-build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup) {
-  ko_ec_lookup <- extract_ko_ec_lookup(orf_long)
-  summary_tbl <- orf_long |>
-    filter(.data$sample %in% selected_samples) |>
+build_ko_plot_table <- function(
+    orf_long,
+    selected_samples,
+    top_n_ko,
+    ko_lookup,
+    pathway_name = NA_character_) {
+  validate_positive_integer(top_n_ko, "top_n_ko")
+
+  first_text <- function(values, fallback = NA_character_) {
+    values <- trimws(as.character(values))
+    values <- values[!is.na(values) & nzchar(values)]
+    if (length(values) == 0L) fallback else values[[1L]]
+  }
+
+  selected_orfs <- orf_long |>
+    filter(.data$sample %in% selected_samples)
+  ko_ec_lookup <- if (nrow(selected_orfs) == 0L) {
+    tibble::tibble(ko_id = character(), ec_codes = character())
+  } else {
+    extract_ko_ec_lookup(selected_orfs)
+  }
+  summary_tbl <- selected_orfs |>
     group_by(.data$sample, .data$ko_id) |>
     summarise(
       tpm = sum(.data$tpm),
-      kegg_function = first(na.omit(.data$kegg_function)),
-      ec_codes = first(na.omit(.data$ec_codes)),
+      kegg_function = first_text(.data$kegg_function),
       .groups = "drop"
     )
 
@@ -1171,16 +1188,18 @@ build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup)
       plot_ko_id = if_else(.data$ko_id %in% top_ko_ids, .data$ko_id, "Other"),
       plot_function = if_else(
         .data$ko_id %in% top_ko_ids,
-        coalesce(.data$kegg_function, unname(as.character(ko_lookup[.data$ko_id])), .data$ko_id),
+        coalesce(
+          .data$kegg_function,
+          unname(as.character(ko_lookup[.data$ko_id])),
+          .data$ko_id
+        ),
         "Other KO outside top N"
-      ),
-      plot_ec = if_else(.data$ko_id %in% top_ko_ids, coalesce(.data$ec_codes, NA_character_), NA_character_)
+      )
     ) |>
     group_by(.data$sample, .data$plot_ko_id) |>
     summarise(
       tpm = sum(.data$tpm),
-      kegg_function = first(na.omit(.data$plot_function)),
-      ec_codes = first(na.omit(.data$plot_ec)),
+      kegg_function = first_text(.data$plot_function),
       .groups = "drop"
     ) |>
     rename(ko_id = plot_ko_id)
@@ -1188,7 +1207,8 @@ build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup)
   sample_totals <- collapsed |>
     group_by(.data$sample) |>
     summarise(sample_pathway_total_tpm = sum(.data$tpm), .groups = "drop")
-
+  positive_samples <- selected_samples[selected_samples %in% sample_totals$sample]
+  zero_samples <- selected_samples[!selected_samples %in% positive_samples]
   plot_ko_ids <- c(
     top_ko_ids,
     if (any(collapsed$ko_id == "Other")) "Other" else character()
@@ -1198,57 +1218,107 @@ build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup)
     filter(.data$ko_id %in% plot_ko_ids) |>
     group_by(.data$ko_id) |>
     summarise(
-      kegg_function = first(na.omit(.data$kegg_function)),
-      ec_codes = first(na.omit(.data$ec_codes)),
+      kegg_function = first_text(.data$kegg_function),
       .groups = "drop"
     )
 
-  plot_tbl <- tidyr::expand_grid(sample = selected_samples, ko_id = plot_ko_ids) |>
-    left_join(
-      collapsed |>
-        filter(.data$ko_id %in% plot_ko_ids),
-      by = c("sample", "ko_id")
-    ) |>
-    left_join(ko_info, by = "ko_id", suffix = c("", "_info")) |>
-    mutate(
-      tpm = replace_na(.data$tpm, 0),
-      kegg_function = coalesce(.data$kegg_function, .data$kegg_function_info, .data$ko_id),
-      ec_codes = coalesce(.data$ec_codes, .data$ec_codes_info, "NA")
-    ) |>
-    select(.data$sample, .data$ko_id, .data$tpm, .data$kegg_function, .data$ec_codes) |>
-    left_join(sample_totals, by = "sample") |>
-    mutate(
-      sample_pathway_percent = if_else(
-        .data$sample_pathway_total_tpm > 0,
-        100 * .data$tpm / .data$sample_pathway_total_tpm,
-        0
-      )
+  positive_rows <- if (length(positive_samples) == 0L || length(plot_ko_ids) == 0L) {
+    tibble::tibble(
+      sample = character(),
+      ko_id = character(),
+      tpm = double(),
+      kegg_function = character(),
+      sample_pathway_total_tpm = double(),
+      sample_pathway_percent = double(),
+      denominator = double(),
+      status = character(),
+      plotted = logical()
     )
+  } else {
+    tidyr::expand_grid(sample = positive_samples, ko_id = plot_ko_ids) |>
+      left_join(
+        collapsed |>
+          filter(.data$ko_id %in% plot_ko_ids),
+        by = c("sample", "ko_id")
+      ) |>
+      left_join(ko_info, by = "ko_id", suffix = c("", "_info")) |>
+      mutate(
+        tpm = replace_na(.data$tpm, 0),
+        kegg_function = coalesce(
+          .data$kegg_function,
+          .data$kegg_function_info,
+          .data$ko_id
+        )
+      ) |>
+      select("sample", "ko_id", "tpm", "kegg_function") |>
+      left_join(sample_totals, by = "sample") |>
+      mutate(
+        sample_pathway_percent = 100 * .data$tpm / .data$sample_pathway_total_tpm,
+        denominator = .data$sample_pathway_total_tpm,
+        status = "ok",
+        plotted = TRUE
+      )
+  }
+
+  if (length(zero_samples) > 0L) {
+    pathway_label <- if (
+      length(pathway_name) == 1L && !is.na(pathway_name) && nzchar(pathway_name)
+    ) {
+      pathway_name
+    } else {
+      "<unknown>"
+    }
+    for (sample_name in zero_samples) {
+      warning(
+        "FUNZ TPM denominator is zero for pathway '", pathway_label,
+        "', sample '", sample_name, "'.",
+        call. = FALSE
+      )
+    }
+  }
+  zero_rows <- tibble::tibble(
+    sample = zero_samples,
+    ko_id = NA_character_,
+    tpm = 0,
+    kegg_function = NA_character_,
+    sample_pathway_total_tpm = 0,
+    sample_pathway_percent = NA_real_,
+    denominator = 0,
+    status = "zero_denominator",
+    plotted = FALSE
+  )
+  plot_tbl <- bind_rows(positive_rows, zero_rows)
+
+  if (nrow(positive_rows) > 0L) {
+    validate_percent_sum(
+      positive_rows,
+      "sample",
+      "sample_pathway_percent"
+    )
+  }
 
   metadata_keys <- plot_tbl |>
-    transmute(
-      sample = as.character(.data$sample),
-      ko_id = as.character(.data$ko_id)
-    )
+    transmute(sample = as.character(.data$sample), ko_id = as.character(.data$ko_id))
   metadata_mass <- plot_tbl |>
     group_by(.data$sample) |>
     summarise(tpm = sum(.data$tpm), .groups = "drop") |>
     arrange(.data$sample)
   plot_tbl <- plot_tbl |>
-    select(-"ec_codes") |>
     left_join(
       ko_ec_lookup,
       by = "ko_id",
-      relationship = "many-to-one"
+      relationship = "many-to-one",
+      na_matches = "never"
     ) |>
     mutate(
-      ec_codes = if_else(.data$ko_id == "Other", NA_character_, .data$ec_codes)
+      ec_codes = if_else(
+        is.na(.data$ko_id) | .data$ko_id == "Other",
+        NA_character_,
+        .data$ec_codes
+      )
     )
   joined_keys <- plot_tbl |>
-    transmute(
-      sample = as.character(.data$sample),
-      ko_id = as.character(.data$ko_id)
-    )
+    transmute(sample = as.character(.data$sample), ko_id = as.character(.data$ko_id))
   joined_mass <- plot_tbl |>
     group_by(.data$sample) |>
     summarise(tpm = sum(.data$tpm), .groups = "drop") |>
@@ -1256,14 +1326,18 @@ build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup)
   if (
     nrow(plot_tbl) != nrow(metadata_keys) ||
       !identical(joined_keys, metadata_keys) ||
-      !isTRUE(all.equal(joined_mass, metadata_mass, tolerance = 1e-10, check.attributes = FALSE))
+      !isTRUE(all.equal(
+        joined_mass,
+        metadata_mass,
+        tolerance = 1e-10,
+        check.attributes = FALSE
+      ))
   ) {
     stop("FUNZ EC metadata join changed row keys or TPM mass.", call. = FALSE)
   }
 
-  validate_percent_sum(plot_tbl, "sample", "sample_pathway_percent")
-
   ko_levels <- plot_tbl |>
+    filter(!is.na(.data$ko_id)) |>
     mutate(is_other = .data$ko_id == "Other") |>
     group_by(.data$ko_id, .data$is_other) |>
     summarise(total_tpm = sum(.data$tpm), .groups = "drop") |>
@@ -1274,7 +1348,8 @@ build_ko_plot_table <- function(orf_long, selected_samples, top_n_ko, ko_lookup)
     mutate(
       sample = factor(.data$sample, levels = selected_samples),
       ko_id = factor(.data$ko_id, levels = ko_levels)
-    )
+    ) |>
+    arrange(.data$sample, desc(.data$plotted), desc(.data$tpm), .data$ko_id)
 }
 
 format_ko_sample_percent <- function(x) {
@@ -1287,6 +1362,7 @@ format_ko_sample_percent <- function(x) {
 
 build_ko_legend_labels <- function(plot_tbl, selected_samples) {
   plot_tbl |>
+    filter(.data$plotted, !is.na(.data$ko_id)) |>
     mutate(
       sample = as.character(.data$sample),
       ko_id = as.character(.data$ko_id),
@@ -1305,17 +1381,20 @@ build_ko_legend_labels <- function(plot_tbl, selected_samples) {
 
 # Build visualizations only from the accompanying TSV tables written to disk.
 make_ko_barplot <- function(plot_tbl, pathway_name, selected_samples) {
-  legend_labels <- build_ko_legend_labels(plot_tbl, selected_samples)
-  ko_levels <- levels(plot_tbl$ko_id)
+  plotted_rows <- plot_tbl |>
+    filter(.data$plotted, !is.na(.data$ko_id))
+  legend_labels <- build_ko_legend_labels(plotted_rows, selected_samples)
+  ko_levels <- levels(plotted_rows$ko_id)
   non_other <- setdiff(ko_levels, "Other")
   palette <- c(
     setNames(rep(colors_hex, length.out = length(non_other)), non_other),
     if ("Other" %in% ko_levels) c(Other = "grey70") else NULL
   )
 
-  ggplot(plot_tbl, aes(x = .data$sample, y = .data$tpm, fill = .data$ko_id)) +
+  ggplot(plotted_rows, aes(x = .data$sample, y = .data$tpm, fill = .data$ko_id)) +
     geom_col(color = "grey25", linewidth = 0.15, width = 0.78) +
     scale_fill_manual(values = palette, labels = legend_labels, drop = FALSE) +
+    scale_x_discrete(limits = selected_samples, drop = FALSE) +
     scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
     labs(
       title = paste0("KO barplot - ", pathway_name),
@@ -2150,13 +2229,14 @@ run_funz_mode <- function(
   dir.create(pathway_dir, recursive = TRUE, showWarnings = FALSE)
 
   orf_long <- build_orf_long_table(pathway_sqm, selected_samples)
-  if (nrow(orf_long) == 0L) {
-    warning("No positive ORF data for pathway ", pathway_name, ".", call. = FALSE)
-    return(output_manifests)
-  }
-
   ko_lookup <- get_ko_name_lookup(pathway_sqm)
-  plot_tbl <- build_ko_plot_table(orf_long, selected_samples, top_n_ko, ko_lookup)
+  plot_tbl <- build_ko_plot_table(
+    orf_long = orf_long,
+    selected_samples = selected_samples,
+    top_n_ko = top_n_ko,
+    ko_lookup = ko_lookup,
+    pathway_name = pathway_name
+  )
   plot_path <- file.path(pathway_dir, "barplot_ko_data.tsv")
   progress_message("FUNZ | writing data: ", plot_path)
   write_tsv_safe(plot_tbl, plot_path)
@@ -2183,6 +2263,14 @@ run_funz_mode <- function(
       pathway_id = pathway_id
     )
   )
+
+  if (!any(plot_tbl$plotted)) {
+    progress_message(
+      "FUNZ | skipping PNG because every selected sample has zero denominator | pathway=",
+      pathway_name
+    )
+    return(output_manifests)
+  }
 
   plot_object <- make_ko_barplot(plot_tbl, pathway_name, selected_samples)
   progress_message("FUNZ | saving PNG | pathway=", pathway_name)
