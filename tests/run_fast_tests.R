@@ -22,7 +22,7 @@ for (test_file in test_files) {
   message("[fast-tests] Running ", test_file)
   output <- system2(
     command = rscript,
-    args = normalizePath(test_file, winslash = "/", mustWork = TRUE),
+    args = shQuote(normalizePath(test_file, winslash = "/", mustWork = TRUE)),
     stdout = TRUE,
     stderr = TRUE
   )
