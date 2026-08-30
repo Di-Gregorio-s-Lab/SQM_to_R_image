@@ -83,7 +83,7 @@ stopifnot(identical(
   script_env$default_pathway_ids
 ))
 stopifnot(!script_env$pathview_is_exportable("top20", NA_character_))
-stopifnot(script_env$pathview_is_exportable("defined", NA_character_))
+stopifnot(!script_env$pathview_is_exportable("defined", NA_character_))
 
 test_root <- tempfile("pathway_selection_")
 dir.create(test_root, recursive = TRUE)
@@ -111,7 +111,7 @@ result <- script_env$run_pathview_mode(
   project_dir = "project",
   tax_mode = "prokfilter",
   pathway_name = "Nitrogen metabolism",
-  pathway_id = "00643",
+  pathway_id = "00910",
   selected_samples = c("S0", "S1"),
   top_n_taxa = 15L,
   top_n_ko = 20L,

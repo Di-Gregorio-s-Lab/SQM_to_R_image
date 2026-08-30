@@ -59,13 +59,13 @@ all_taxonomy_columns <- c(
 known_pathways <- tibble::tribble(
   ~pathway_id, ~canonical_pathway_name,
   "00361", "Chlorocyclohexane and chlorobenzene degradation",
-  "00622", "Carbon fixation in photosynthetic organisms",
+  "00710", "Carbon fixation in photosynthetic organisms",
   "00623", "Toluene degradation",
   "00621", "Dioxin degradation",
   "00625", "Chloroalkane and chloroalkene degradation",
   "00630", "Glyoxylate and dicarboxylate metabolism",
-  "00642", "Nitrotoluene degradation",
-  "00643", "Nitrogen metabolism",
+  "00633", "Nitrotoluene degradation",
+  "00910", "Nitrogen metabolism",
   "00980", "Metabolism of xenobiotics by cytochrome P450"
 )
 default_pathway_ids <- known_pathways$pathway_id
@@ -273,7 +273,9 @@ pathway_selection_directory <- function(pathway_selection) {
 }
 
 pathview_is_exportable <- function(pathway_selection, pathway_id) {
-  !(identical(pathway_selection, "top20") && is.na(pathway_id))
+  length(pathway_id) == 1L &&
+    !is.na(pathway_id) &&
+    isTRUE(grepl("^[0-9]{5}$", pathway_id))
 }
 
 # Normalize user-derived labels before using them as directory or file names.
@@ -2774,7 +2776,7 @@ main <- function() {
       pathway_name <- pathway_info$pathway_name
       if (!pathview_is_exportable(pathway_info$pathway_selection, pathway_info$pathway_id)) {
         warning(
-          "Skipping PATHVIEW for top20: pathway has no resolvable KEGG ID: ",
+          "Skipping PATHVIEW: pathway has no resolvable KEGG ID: ",
           pathway_name,
           call. = FALSE
         )

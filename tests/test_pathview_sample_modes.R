@@ -63,7 +63,7 @@ result <- script_env$run_pathview_mode(
   project_dir = "project",
   tax_mode = "prokfilter",
   pathway_name = "Nitrogen metabolism",
-  pathway_id = "00643",
+  pathway_id = "00910",
   selected_samples = c("CS8T0", "CS8T2"),
   top_n_taxa = 15L,
   top_n_ko = 20L,
