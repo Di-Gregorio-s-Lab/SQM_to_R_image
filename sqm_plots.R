@@ -1061,6 +1061,22 @@ subset_sqm_by_taxon <- function(
   subset_sqm
 }
 
+build_ko_expansion_audit <- function(orf_table) {
+  if (!"KEGG ID" %in% colnames(orf_table)) {
+    stop("KO expansion audit requires column: KEGG ID", call. = FALSE)
+  }
+  ko_ids <- map(as.character(orf_table[["KEGG ID"]]), extract_ko_ids)
+  ko_counts <- lengths(ko_ids)
+  tibble::tibble(
+    input_orf_count = as.integer(nrow(orf_table)),
+    excluded_orfs_without_ko = as.integer(sum(ko_counts == 0L)),
+    multi_ko_orf_count = as.integer(sum(ko_counts > 1L)),
+    orf_ko_association_count = as.integer(sum(ko_counts)),
+    multi_ko_policy = "full_tpm_per_ko",
+    ko_denominator_basis = "expanded_orf_sample_ko_tpm"
+  )
+}
+
 # Build the canonical ORF × sample × KO table and its pre-expansion audit.
 # Every KO associated with an ORF receives the ORF's full TPM. Percentages
 # therefore use the expanded ORF × sample × KO table as their denominator.
@@ -1105,15 +1121,7 @@ build_orf_long_result <- function(pathway_sqm, selected_samples) {
       ko_ids = map(as.character(.data[["KEGG ID"]]), extract_ko_ids)
     )
 
-  ko_counts <- lengths(annotations$ko_ids)
-  ko_audit <- tibble::tibble(
-    input_orf_count = as.integer(nrow(annotations)),
-    excluded_orfs_without_ko = as.integer(sum(ko_counts == 0L)),
-    multi_ko_orf_count = as.integer(sum(ko_counts > 1L)),
-    orf_ko_association_count = as.integer(sum(ko_counts)),
-    multi_ko_policy = "full_tpm_per_ko",
-    ko_denominator_basis = "expanded_orf_sample_ko_tpm"
-  )
+  ko_audit <- build_ko_expansion_audit(orf_table)
 
   tpm_long <- tpm_table |>
     select(all_of(c("orf_id", selected_samples))) |>
