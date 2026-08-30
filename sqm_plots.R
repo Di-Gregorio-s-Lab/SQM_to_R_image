@@ -3233,7 +3233,112 @@ read_section_manifest <- function(manifest_path, relative_dir) {
   }
 }
 
+manifest_target_status <- function(output_files, output_dir) {
+  output_files <- as.character(output_files)
+  output_root <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+  output_root_prefix <- paste0(output_root, "/")
+  case_normalize <- if (.Platform$OS.type == "windows") tolower else identity
+
+  inspected <- lapply(output_files, function(output_file) {
+    normalized_relative <- if (is.na(output_file)) NA_character_ else gsub("\\\\", "/", output_file)
+    reason <- NA_character_
+    target_path <- NA_character_
+
+    if (is.na(normalized_relative) || !nzchar(normalized_relative)) {
+      reason <- "empty output_file"
+    } else if (grepl("^(?:[A-Za-z]:[/\\\\]|[/\\\\]{1,2})", normalized_relative, perl = TRUE)) {
+      reason <- "output_file must be relative"
+    } else if (".." %in% strsplit(normalized_relative, "/+", perl = TRUE)[[1L]]) {
+      reason <- "output_file must not contain '..' path traversal"
+    } else {
+      target_path <- normalizePath(
+        file.path(output_root, normalized_relative),
+        winslash = "/",
+        mustWork = FALSE
+      )
+      inside_root <- startsWith(
+        case_normalize(target_path),
+        case_normalize(output_root_prefix)
+      )
+      if (!inside_root) {
+        reason <- "output_file resolves outside output_dir"
+      } else if (!file.exists(target_path)) {
+        reason <- "target does not exist"
+      } else {
+        target_info <- suppressWarnings(file.info(target_path))
+        if (isTRUE(target_info$isdir[[1L]])) {
+          reason <- "target is not a regular file"
+        } else if (is.na(target_info$size[[1L]]) || target_info$size[[1L]] <= 0) {
+          reason <- "target is empty"
+        }
+      }
+    }
+
+    tibble::tibble(
+      output_file = normalized_relative,
+      target_path = target_path,
+      valid = is.na(reason),
+      reason = reason
+    )
+  })
+
+  dplyr::bind_rows(inspected)
+}
+
+validate_current_manifest_targets <- function(manifest_tbl, output_dir) {
+  if (nrow(manifest_tbl) == 0L) {
+    return(invisible(manifest_tbl))
+  }
+  if (!"output_file" %in% colnames(manifest_tbl)) {
+    stop("Current-run manifest rows require an output_file column.", call. = FALSE)
+  }
+
+  status <- manifest_target_status(manifest_tbl$output_file, output_dir)
+  invalid <- status[!status$valid, , drop = FALSE]
+  if (nrow(invalid) > 0L) {
+    details <- paste0(invalid$output_file, " (", invalid$reason, ")")
+    stop(
+      "Current-run manifest target validation failed: ",
+      paste(details, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  invisible(manifest_tbl)
+}
+
+prune_stale_manifest_targets <- function(manifest_tbl, output_dir, section_label) {
+  if (nrow(manifest_tbl) == 0L) {
+    return(manifest_tbl)
+  }
+  if (!"output_file" %in% colnames(manifest_tbl)) {
+    warning(
+      "Pruned ", nrow(manifest_tbl), " stale ", section_label,
+      " manifest row(s): missing output_file column.",
+      call. = FALSE
+    )
+    return(manifest_tbl[0, , drop = FALSE])
+  }
+
+  status <- manifest_target_status(manifest_tbl$output_file, output_dir)
+  if (any(!status$valid)) {
+    warning(
+      "Pruned ", sum(!status$valid), " stale ", section_label,
+      " manifest row(s): ",
+      paste0(status$output_file[!status$valid], " (", status$reason[!status$valid], ")", collapse = ", "),
+      call. = FALSE
+    )
+  }
+  kept <- manifest_tbl[status$valid, , drop = FALSE]
+  if (nrow(kept) > 0L) {
+    kept$output_file <- status$output_file[status$valid]
+  }
+  kept
+}
+
 merge_section_manifest <- function(new_manifest_tbl, existing_manifest_tbl) {
+  if (nrow(new_manifest_tbl) > 0L) {
+    new_manifest_tbl$output_file <- gsub("\\\\", "/", as.character(new_manifest_tbl$output_file))
+  }
   bind_rows(new_manifest_tbl, existing_manifest_tbl) |>
     distinct(.data$output_file, .keep_all = TRUE)
 }
@@ -3250,13 +3355,62 @@ section_manifest_paths <- function(output_dir) {
 }
 
 write_section_manifest <- function(manifest_tbl, output_dir, relative_dir, filename) {
+  validate_current_manifest_targets(manifest_tbl, output_dir)
   dir_path <- file.path(output_dir, relative_dir)
   dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
   manifest_path <- file.path(dir_path, filename)
   existing_manifest_tbl <- read_section_manifest(manifest_path, relative_dir)
+  existing_manifest_tbl <- prune_stale_manifest_targets(
+    existing_manifest_tbl,
+    output_dir,
+    sub("^manifest_|\\.tsv$", "", filename)
+  )
   merged_manifest_tbl <- merge_section_manifest(manifest_tbl, existing_manifest_tbl)
   write_tsv_safe(merged_manifest_tbl, manifest_path)
   manifest_path
+}
+
+write_combined_manifest <- function(output_dir) {
+  definitions <- list(
+    flow = list(relative_dir = "flowplot", filename = "manifest_flow.tsv"),
+    funz = list(relative_dir = "funz", filename = "manifest_funz.tsv"),
+    taxon = list(relative_dir = "", filename = "manifest_taxon.tsv"),
+    pathview = list(relative_dir = "pathview", filename = "manifest_pathview.tsv"),
+    pie = list(relative_dir = "pie", filename = "manifest_pie.tsv")
+  )
+
+  valid_manifests <- character()
+  for (section in names(definitions)) {
+    definition <- definitions[[section]]
+    manifest_path <- file.path(output_dir, definition$relative_dir, definition$filename)
+    if (!file.exists(manifest_path)) {
+      next
+    }
+
+    reconciled_path <- write_section_manifest(
+      tibble::tibble(),
+      output_dir,
+      definition$relative_dir,
+      definition$filename
+    )
+    reconciled <- read_section_manifest(reconciled_path, definition$relative_dir)
+    if (nrow(reconciled) > 0L) {
+      valid_manifests[[section]] <- reconciled_path
+    }
+  }
+
+  manifest_all <- tibble::tibble(
+    section = names(valid_manifests),
+    manifest_file = vapply(
+      valid_manifests,
+      relative_to_output,
+      character(1),
+      output_dir = output_dir
+    )
+  )
+  manifest_all_path <- file.path(output_dir, "manifest_all.tsv")
+  write_tsv_safe(manifest_all, manifest_all_path)
+  manifest_all_path
 }
 
 # ---- Command-line entry point ---------------------------------------------
@@ -3721,13 +3875,7 @@ main <- function() {
     manifest_paths[["pie"]] <- write_section_manifest(manifests$pie, output_dir, "pie", "manifest_pie.tsv")
   }
 
-  manifest_paths <- section_manifest_paths(output_dir)
-  manifest_all <- tibble::tibble(
-    section = names(manifest_paths),
-    manifest_file = vapply(manifest_paths, relative_to_output, character(1), output_dir = output_dir)
-  )
-  manifest_all_path <- file.path(output_dir, "manifest_all.tsv")
-  write_tsv_safe(manifest_all, manifest_all_path)
+  manifest_all_path <- write_combined_manifest(output_dir)
 
   message("Output directory: ", output_dir)
   message("Combined manifest: ", manifest_all_path)
