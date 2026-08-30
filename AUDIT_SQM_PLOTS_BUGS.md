@@ -190,17 +190,17 @@ Verifiche osservate:
 
 Limitazione non-P0 riconfermata dalla run candidata: sul lungo percorso Windows del workspace il nome del PNG pathway e' stato troncato e il target previsto nel manifest non esiste. Il difetto resta sotto BUG-P3-01/portabilita' degli output; non altera il TSV e le invarianti scientifiche usate per chiudere P0, ma impedisce di considerare l'intera directory candidata un output finale approvato.
 
-## P1 - Correggere subito dopo
+## P1 - Corretto su `fix/p1-correctness`
 
 ### BUG-P1-01: `top20` include BRITE e categorie non-pathway
 
-Severita': alta. Stato: verificato.
+Severita': alta. Stato: corretto e verificato su `fix/p1-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:535-542`: `split_kegg_pathway_field()` prende sempre l'ultima foglia dopo `;`.
-- `sqm_plots.R:555-603`: `select_top_pathways()` ranka tutte le foglie in `KEGGPATH`.
-- `sqm_plots.R:618-620`: `select_pathway_groups()` inserisce quel ranking nel gruppo `top20`.
+- `sqm_plots.R:74-81`: radici KEGG PATHWAY ammesse.
+- `sqm_plots.R:547-648`: parsing gerarchico e membership ORF/pathway deduplicata.
+- `sqm_plots.R:654-742`: ranking pathway-only con metadati gerarchici e spareggio deterministico.
 
 Prova:
 
@@ -223,14 +223,13 @@ Test di regressione:
 
 ### BUG-P1-02: `top20` specifico per taxon e' in realta' globale
 
-Severita': alta. Stato: verificato.
+Severita': alta. Stato: corretto e verificato su `fix/p1-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:2530-2534`: `main()` carica `sqm` completo.
-- `sqm_plots.R:2535-2539`: `select_pathway_groups()` e' chiamato prima di creare i contesti filtrati.
-- `sqm_plots.R:2573-2596`: solo dopo vengono costruiti i `filter_contexts`.
-- `sqm_plots.R:2617-2625`: `pathway_sqms` viene costruito per ogni contesto usando il gruppo pathway gia' scelto.
+- `sqm_plots.R:744-771`: `select_context_pathway_groups()` mantiene `defined` e calcola `top20` sullo SQM ricevuto.
+- `sqm_plots.R:3057-3064`: `defined` viene risolto una sola volta sul progetto completo.
+- `sqm_plots.R:3112-3148`: gruppi, entry e subset pathway vengono costruiti dentro ogni `filter_context`.
 
 Impatto:
 
@@ -249,13 +248,13 @@ Test di regressione:
 
 ### BUG-P1-03: join KO molti-a-molti raddoppia il TPM nei flow
 
-Severita': alta. Stato: verificato.
+Severita': alta. Stato: corretto e verificato su `fix/p1-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:1138-1178`: `build_flow_table_for_rank()`.
-- `sqm_plots.R:1165-1169`: `ko_meta <- orf_long |> distinct(ko_id, kegg_function)` seguito da `left_join(ko_meta, by = c("KO" = "ko_id"))`.
-- `sqm_plots.R:1802-1813`: `run_flow_mode()` usa la tabella prodotta per ogni rank e sample.
+- `sqm_plots.R:1341-1392`: `build_flow_ko_metadata()` produce una riga per KO e concatena descrizioni distinte ordinate.
+- `sqm_plots.R:1394-1455`: `join_flow_ko_metadata()` impone relazione molti-a-uno e postcondizioni su chiavi, righe e TPM per sample.
+- `sqm_plots.R:1457-1496`: `build_flow_table_for_rank()` usa il lookup univoco senza duplicare gli archi.
 
 Prova:
 
@@ -281,6 +280,34 @@ Test di regressione:
 
 - Test minimo con un KO associato a due `kegg_function`: il TPM post-join deve restare uguale al TPM pre-join.
 - Assert esplicito in `build_flow_table_for_rank()` o nel test: nessun aumento di righe per chiave `sample/taxon/KO` causato dal metadata join.
+
+## Evidenza di chiusura P1 - 2026-08-30
+
+Branch: `fix/p1-correctness`, creato da `72115a9`.
+
+Checkpoint TDD e implementazione:
+
+- `dcfdc46`, `f8913f7`, `94d0821`: RED sintetici rispettivamente per gerarchia `top20`, selezione contestuale e join KO FLOW;
+- `3d43c41`: RED di integrazione reale P1;
+- `d4b19d2`: filtro delle sole gerarchie KEGG PATHWAY;
+- `c681ab2`: calcolo di `top20` dentro ogni contesto SQM;
+- `5e3a7b8`: metadata KO uno-a-uno e conservazione della massa FLOW;
+- `13500e7`: gate di copertura P1;
+- `f34eadf`: parsing gerarchico in batch, introdotto dopo che la prima integrazione ha evidenziato una regressione prestazionale sul progetto completo.
+
+Risultati finali osservati, sempre tramite `rtk`:
+
+- `tests/run_fast_tests.R`: exit `0`, 10 file di test veloci completati;
+- `tests/check_p0_coverage.R`: exit `0`, funzioni P0 tra 84.21% e 100%; baseline globale informativa 9.74%;
+- `tests/check_p1_coverage.R`: exit `0`, funzioni P1 tra 84.62% e 100%; baseline globale informativa P1 13.59%; `covr` 3.6.5;
+- `tests/test_p0_integration_Au_sip.R`: exit `0`, 88258 ORF Bacillota e invarianti P0 ancora verdi;
+- `tests/test_p1_integration_Au_sip.R`: exit `0`, `global_top20=20`, `Bacillota_top20=20`, confronto con riferimento indipendente superato e primi tre Bacillota `Quorum sensing`, `ABC transporters`, `Two-component system`;
+- sul pathway `00361`, chiavi e TPM FLOW per sample restano invariati dopo il join dei metadata KO;
+- il warning di compatibilita' progetto SqueezeMeta 1.7.3.alpha3/SQMtools 1.7.2 resta visibile;
+- run CLI mirata: exit `0` in `out/p1_candidate_20260830_01`, nove TSV FLOW e nove PNG per i tre pathway Bacillota; tutti i target del manifest esistono, le chiavi `sample/taxon/KO` sono univoche e `flow_percent` somma a 100 entro `1e-6` in ogni TSV;
+- review indipendente: nessun rilievo CRITICAL, HIGH o MEDIUM.
+
+Non e' stata eseguita una run completa `--mode=all`: P2 resta aperto. La run candidata P1 non approva gli output storici. Il difetto dei nomi PNG troncati su percorsi Windows lunghi resta P3; il fatto che i nomi brevi del candidato P1 esistano non costituisce una correzione di quel difetto.
 
 ## P2 - Correttezza e completezza semantica
 
@@ -594,13 +621,13 @@ Controlli manuali o scriptabili dopo la run:
 
 ## Checklist prossima sessione
 
-- [ ] Aggiornare test di regressione per BUG-P0-01, BUG-P0-02 e BUG-P0-03 prima o insieme alle correzioni.
-- [ ] Correggere le mappature KEGG e aggiornare i test che codificano ID errati.
-- [ ] Ricalcolare le percentuali tassonomiche pathway con denominatore pathway/sample.
-- [ ] Rendere il filtro taxon coerente con la sorgente ORF usata per risolvere il taxon.
-- [ ] Limitare `top20` a vere pathway map.
-- [ ] Calcolare `top20` nel contesto filtrato quando `--taxa` e' attivo.
-- [ ] Rendere uno-a-uno il metadata join KO nei flow e verificare conservazione TPM.
+- [x] Aggiornare test di regressione per BUG-P0-01, BUG-P0-02 e BUG-P0-03 prima o insieme alle correzioni.
+- [x] Correggere le mappature KEGG e aggiornare i test che codificano ID errati.
+- [x] Ricalcolare le percentuali tassonomiche pathway con denominatore pathway/sample.
+- [x] Rendere il filtro taxon coerente con la sorgente ORF usata per risolvere il taxon.
+- [x] Limitare `top20` a vere pathway map.
+- [x] Calcolare `top20` nel contesto filtrato quando `--taxa` e' attivo.
+- [x] Rendere uno-a-uno il metadata join KO nei flow e verificare conservazione TPM.
 - [ ] Tenere `Unclassified` distinto da `Other`.
 - [ ] Definire e documentare policy multi-EC e multi-KO nei TSV/manifest.
 - [ ] Gestire sample pathway vuoti senza interrompere l'intera run.
