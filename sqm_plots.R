@@ -452,6 +452,53 @@ normalize_taxon_value <- function(x) {
   x
 }
 
+select_top_classified_taxa <- function(data, taxon_col, value_col, top_n) {
+  missing_columns <- setdiff(c(taxon_col, value_col), colnames(data))
+  if (length(missing_columns) > 0L) {
+    stop(
+      "Taxonomy ranking requires columns: ",
+      paste(missing_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  validate_positive_integer(top_n, "top_n_taxa")
+
+  taxon_values <- normalize_taxon_value(data[[taxon_col]])
+  if (any(taxon_values == "Other")) {
+    stop(
+      "The source taxonomy label 'Other' is reserved for classified taxa outside Top N.",
+      call. = FALSE
+    )
+  }
+
+  tibble::tibble(
+    taxon = taxon_values,
+    value = as.numeric(data[[value_col]])
+  ) |>
+    filter(.data$taxon != "Unclassified", !is.na(.data$value), .data$value > 0) |>
+    group_by(.data$taxon) |>
+    summarise(total_value = sum(.data$value), .groups = "drop") |>
+    arrange(desc(.data$total_value), .data$taxon) |>
+    slice_head(n = top_n) |>
+    pull(.data$taxon)
+}
+
+collapse_taxa_preserving_unclassified <- function(taxon_values, top_taxa) {
+  taxon_values <- normalize_taxon_value(taxon_values)
+  if (any(taxon_values == "Other")) {
+    stop(
+      "The source taxonomy label 'Other' is reserved for classified taxa outside Top N.",
+      call. = FALSE
+    )
+  }
+
+  dplyr::case_when(
+    taxon_values == "Unclassified" ~ "Unclassified",
+    taxon_values %in% top_taxa ~ taxon_values,
+    TRUE ~ "Other"
+  )
+}
+
 format_display_number <- function(x, suffix = "") {
   dplyr::case_when(
     is.na(x) ~ paste0("NA", suffix),
@@ -1455,13 +1502,14 @@ join_flow_ko_metadata <- function(summary_tbl, ko_meta, tolerance = 1e-10) {
 }
 
 build_flow_table_for_rank <- function(orf_long, rank, selected_samples, top_n_taxa, top_n_ko, ko_lookup) {
-  top_taxa <- orf_long |>
-    filter(.data$sample %in% selected_samples) |>
-    group_by(.data[[rank]]) |>
-    summarise(total_tpm = sum(.data$tpm), .groups = "drop") |>
-    arrange(desc(.data$total_tpm), .data[[rank]]) |>
-    slice_head(n = top_n_taxa) |>
-    pull(.data[[rank]])
+  selected_orfs <- orf_long |>
+    filter(.data$sample %in% selected_samples)
+  top_taxa <- select_top_classified_taxa(
+    data = selected_orfs,
+    taxon_col = rank,
+    value_col = "tpm",
+    top_n = top_n_taxa
+  )
 
   top_kos <- orf_long |>
     filter(.data$sample %in% selected_samples) |>
@@ -1471,10 +1519,9 @@ build_flow_table_for_rank <- function(orf_long, rank, selected_samples, top_n_ta
     slice_head(n = top_n_ko) |>
     pull(.data$ko_id)
 
-  summary_tbl <- orf_long |>
-    filter(.data$sample %in% selected_samples) |>
+  summary_tbl <- selected_orfs |>
     mutate(
-      taxon = if_else(.data[[rank]] %in% top_taxa, .data[[rank]], "Other"),
+      taxon = collapse_taxa_preserving_unclassified(.data[[rank]], top_taxa),
       KO = if_else(.data$ko_id %in% top_kos, .data$ko_id, "Other")
     ) |>
     group_by(.data$sample, .data$taxon, .data$KO) |>
@@ -1903,22 +1950,24 @@ build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name
     return(base_tbl)
   }
 
-  top_taxa <- head(base_tbl$taxon_rank, top_n_taxa)
-  kept_rows <- base_tbl |>
-    filter(.data$taxon_rank %in% top_taxa)
-  other_rows <- base_tbl |>
-    filter(!.data$taxon_rank %in% top_taxa)
-
-  plot_tbl <- if (nrow(other_rows) > 0L) {
-    bind_rows(
-      kept_rows,
-      tibble::tibble(
-        taxon_rank = "Other",
-        tpm = sum(other_rows$tpm)
+  top_taxa <- select_top_classified_taxa(
+    data = base_tbl,
+    taxon_col = "taxon_rank",
+    value_col = "tpm",
+    top_n = top_n_taxa
+  )
+  plot_tbl <- base_tbl |>
+    mutate(
+      taxon_rank = collapse_taxa_preserving_unclassified(
+        .data$taxon_rank,
+        top_taxa
       )
-    )
-  } else {
-    kept_rows
+    ) |>
+    group_by(.data$taxon_rank) |>
+    summarise(tpm = sum(.data$tpm), .groups = "drop")
+
+  if (!isTRUE(all.equal(sum(plot_tbl$tpm), sum(base_tbl$tpm), tolerance = 1e-10))) {
+    stop("Taxonomy Top N collapse changed TPM mass.", call. = FALSE)
   }
 
   plot_tbl |>
