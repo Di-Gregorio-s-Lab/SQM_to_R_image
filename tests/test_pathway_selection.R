@@ -209,8 +209,7 @@ merged_pie_path <- script_env$write_section_manifest(
 )
 merged_pie_manifest <- readr::read_tsv(merged_pie_path, show_col_types = FALSE, na = "NA")
 legacy_pie_entry <- merged_pie_manifest |> filter(.data$pathway == "Legacy pathway")
-stopifnot(identical(legacy_pie_entry$output_file, "pie/definiti/Legacy_pathway/S0/legacy.png"))
-stopifnot(identical(legacy_pie_entry$output_scope, "pathway_defined"))
+stopifnot(nrow(legacy_pie_entry) == 0L)
 
 script_env$write_section_manifest(pie_result$pie, test_root, "pie", "manifest_pie.tsv")
 deduplicated_pie_manifest <- readr::read_tsv(merged_pie_path, show_col_types = FALSE, na = "NA")

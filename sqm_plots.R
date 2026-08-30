@@ -3554,6 +3554,16 @@ merge_section_manifest <- function(new_manifest_tbl, existing_manifest_tbl) {
   if (nrow(new_manifest_tbl) > 0L) {
     new_manifest_tbl$output_file <- gsub("\\\\", "/", as.character(new_manifest_tbl$output_file))
   }
+  common_columns <- intersect(colnames(new_manifest_tbl), colnames(existing_manifest_tbl))
+  for (column_name in common_columns) {
+    new_column <- new_manifest_tbl[[column_name]]
+    existing_column <- existing_manifest_tbl[[column_name]]
+    if (is.logical(existing_column) && all(is.na(existing_column)) && !is.logical(new_column)) {
+      existing_manifest_tbl[[column_name]] <- rep(new_column[NA_integer_], length(existing_column))
+    } else if (is.logical(new_column) && all(is.na(new_column)) && !is.logical(existing_column)) {
+      new_manifest_tbl[[column_name]] <- rep(existing_column[NA_integer_], length(new_column))
+    }
+  }
   bind_rows(new_manifest_tbl, existing_manifest_tbl) |>
     distinct(.data$output_file, .keep_all = TRUE)
 }
@@ -3578,7 +3588,7 @@ write_section_manifest <- function(manifest_tbl, output_dir, relative_dir, filen
   existing_manifest_tbl <- prune_stale_manifest_targets(
     existing_manifest_tbl,
     output_dir,
-    sub("^manifest_|\\.tsv$", "", filename)
+    gsub("^manifest_|\\.tsv$", "", filename)
   )
   merged_manifest_tbl <- merge_section_manifest(manifest_tbl, existing_manifest_tbl)
   write_tsv_safe(merged_manifest_tbl, manifest_path)
