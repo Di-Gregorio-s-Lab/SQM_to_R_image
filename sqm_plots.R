@@ -148,6 +148,7 @@ print_help <- function() {
     "                             Accepts numeric codes (for example, 00361) or full names.\n",
     "  --pathway_selection_modes=LIST Default: defined,top20.\n",
     "                             top20 ranks only three-level KEGG PATHWAY entries.\n",
+    "                             With --taxa, top20 is recalculated inside each taxon context.\n",
     "  --pathway_top_n=NUM        Number of KEGG pathways ranked in top20; default: 20.\n",
     "  --samples=LIST             Comma-separated samples.\n",
     "  --tax_mode=MODE            Default: prokfilter.\n",
@@ -696,9 +697,9 @@ select_top_pathways <- function(sqm, selected_samples, pathway_top_n = default_p
   })
 }
 
-select_pathway_groups <- function(
-    sqm,
-    requested_pathways,
+select_context_pathway_groups <- function(
+    context_sqm,
+    resolved_defined_pathways,
     pathway_selection_modes,
     selected_samples,
     pathway_top_n = default_pathway_top_n) {
@@ -706,14 +707,46 @@ select_pathway_groups <- function(
   groups <- list()
 
   if ("defined" %in% pathway_selection_modes) {
-    defined_pathways <- if (length(requested_pathways) == 0L) default_pathway_ids else requested_pathways
-    groups[["defined"]] <- resolve_pathways(sqm, defined_pathways)
+    groups[["defined"]] <- resolved_defined_pathways
   }
   if ("top20" %in% pathway_selection_modes) {
-    groups[["top20"]] <- select_top_pathways(sqm, selected_samples, pathway_top_n)
+    context_top_pathways <- select_top_pathways(
+      context_sqm,
+      selected_samples,
+      pathway_top_n
+    )
+    if (length(context_top_pathways) > 0L) {
+      groups[["top20"]] <- context_top_pathways
+    }
   }
 
   groups
+}
+
+select_pathway_groups <- function(
+    sqm,
+    requested_pathways,
+    pathway_selection_modes,
+    selected_samples,
+    pathway_top_n = default_pathway_top_n) {
+  pathway_selection_modes <- normalize_pathway_selection_modes(pathway_selection_modes)
+  resolved_defined_pathways <- list()
+  if ("defined" %in% pathway_selection_modes) {
+    defined_pathways <- if (length(requested_pathways) == 0L) {
+      default_pathway_ids
+    } else {
+      requested_pathways
+    }
+    resolved_defined_pathways <- resolve_pathways(sqm, defined_pathways)
+  }
+
+  select_context_pathway_groups(
+    context_sqm = sqm,
+    resolved_defined_pathways = resolved_defined_pathways,
+    pathway_selection_modes = pathway_selection_modes,
+    selected_samples = selected_samples,
+    pathway_top_n = pathway_top_n
+  )
 }
 
 normalize_sqm_project_dir <- function(project_dir) {
@@ -2863,35 +2896,15 @@ main <- function() {
   validate_samples(selected_samples, available_samples)
   progress_message("Selected samples: ", paste(selected_samples, collapse = ", "))
 
-  pathway_groups <- if (mode == "enzimi") {
-    list()
-  } else {
-    select_pathway_groups(
-      sqm = sqm,
-      requested_pathways = requested_pathways,
-      pathway_selection_modes = pathway_selection_modes,
-      selected_samples = selected_samples,
-      pathway_top_n = pathway_top_n
-    )
+  resolved_defined_pathways <- list()
+  if (mode != "enzimi" && "defined" %in% pathway_selection_modes) {
+    defined_pathways <- if (length(requested_pathways) == 0L) {
+      default_pathway_ids
+    } else {
+      requested_pathways
+    }
+    resolved_defined_pathways <- resolve_pathways(sqm, defined_pathways)
   }
-  if (length(pathway_groups) > 0L) {
-    progress_message(
-      "Resolved pathways: ",
-      paste(
-        unlist(map(pathway_groups, ~ vapply(.x, `[[`, character(1), "canonical_pathway_name"))),
-        collapse = " | "
-      )
-    )
-  }
-  pathway_entries <- imap(pathway_groups, function(pathways, pathway_selection) {
-    map(pathways, function(pathway_info) {
-      list(
-        pathway_name = pathway_info$canonical_pathway_name,
-        pathway_id = pathway_info$pathway_id,
-        pathway_selection = pathway_selection
-      )
-    })
-  }) |> purrr::flatten()
 
   filter_contexts <- if (length(requested_taxa) == 0L) {
     list(list(
@@ -2937,6 +2950,41 @@ main <- function() {
       "Output context: ", context_output_dir,
       if (!is.na(context$filtered_taxon)) paste0(" | taxon filter=", context$filtered_taxon, " @ ", context$filtered_taxon_rank) else ""
     )
+
+    pathway_groups <- if (mode == "enzimi") {
+      list()
+    } else {
+      select_context_pathway_groups(
+        context_sqm = context_sqm,
+        resolved_defined_pathways = resolved_defined_pathways,
+        pathway_selection_modes = pathway_selection_modes,
+        selected_samples = selected_samples,
+        pathway_top_n = pathway_top_n
+      )
+    }
+    if (length(pathway_groups) > 0L) {
+      progress_message(
+        "Resolved pathways for context ", context_output_dir, ": ",
+        paste(
+          unlist(map(
+            pathway_groups,
+            ~ vapply(.x, `[[`, character(1), "canonical_pathway_name")
+          )),
+          collapse = " | "
+        )
+      )
+    }
+    pathway_entries <- imap(pathway_groups, function(pathways, pathway_selection) {
+      map(pathways, function(pathway_info) {
+        list(
+          pathway_name = pathway_info$canonical_pathway_name,
+          pathway_id = pathway_info$pathway_id,
+          pathway_selection = pathway_selection
+        )
+      })
+    }) |>
+      purrr::flatten()
+
     pathway_sqms <- map(
       pathway_entries,
       function(pathway_info) {
