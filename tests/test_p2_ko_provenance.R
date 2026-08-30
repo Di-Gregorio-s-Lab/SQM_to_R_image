@@ -118,6 +118,38 @@ expected_audit <- tibble::tibble(
   ko_denominator_basis = "expanded_orf_sample_ko_tpm"
 )
 
+expect_manifest_audit <- function(manifest_tbl, label) {
+  expect_true(nrow(manifest_tbl) > 0L, paste0(label, " produced no manifest rows"))
+  expect_true(
+    all(required_audit_fields %in% colnames(manifest_tbl)),
+    paste0(label, " manifest is missing KO provenance fields")
+  )
+
+  expected_counts <- c(
+    input_orf_count = 3L,
+    excluded_orfs_without_ko = 1L,
+    multi_ko_orf_count = 1L,
+    orf_ko_association_count = 3L
+  )
+  for (field in names(expected_counts)) {
+    expect_identical(
+      as.integer(manifest_tbl[[field]]),
+      rep(unname(expected_counts[[field]]), nrow(manifest_tbl)),
+      paste0(label, " manifest did not propagate ", field)
+    )
+  }
+  expect_identical(
+    as.character(manifest_tbl$multi_ko_policy),
+    rep("full_tpm_per_ko", nrow(manifest_tbl)),
+    paste0(label, " manifest did not propagate multi_ko_policy")
+  )
+  expect_identical(
+    as.character(manifest_tbl$ko_denominator_basis),
+    rep("expanded_orf_sample_ko_tpm", nrow(manifest_tbl)),
+    paste0(label, " manifest did not propagate ko_denominator_basis")
+  )
+}
+
 run_case("ORF long result exposes stable KO provenance", {
   build_orf_long_result <- require_script_function(
     script_env,
@@ -237,6 +269,58 @@ run_case("non-KO manifest row retains provenance schema with NA", {
     }, logical(1L))),
     "A non-KO manifest row must use NA for every KO provenance field"
   )
+})
+
+run_case("KO mode runners propagate expansion provenance to every manifest row", {
+  temp_root <- tempfile("p2_ko_manifest_modes_")
+  dir.create(temp_root, recursive = TRUE)
+  on.exit(unlink(temp_root, recursive = TRUE, force = TRUE), add = TRUE)
+
+  common_args <- list(
+    output_dir = temp_root,
+    manifest_base_dir = temp_root,
+    script_name = "sqm_plots.R",
+    project_dir = "synthetic_project",
+    tax_mode = "prokfilter",
+    pathway_name = "Synthetic pathway",
+    pathway_sqm = fake_pathway_sqm,
+    selected_samples = "S_positive",
+    dimensions = list(),
+    plot_dpi = 72,
+    top_n_taxa = 3L,
+    top_n_ko = 3L,
+    pathway_id = "00000"
+  )
+
+  funz_result <- do.call(
+    script_env$run_funz_mode,
+    c(common_args, list(output_manifests = list(funz = tibble::tibble())))
+  )
+  flow_result <- do.call(
+    script_env$run_flow_mode,
+    c(
+      common_args,
+      list(
+        output_manifests = list(flow = tibble::tibble()),
+        taxonomy_ranks = "phylum",
+        flowplot_formats = character()
+      )
+    )
+  )
+  pie_result <- do.call(
+    script_env$run_pie_mode,
+    c(
+      common_args,
+      list(
+        output_manifests = list(pie = tibble::tibble()),
+        taxonomy_ranks = "phylum"
+      )
+    )
+  )
+
+  expect_manifest_audit(funz_result$funz, "FUNZ")
+  expect_manifest_audit(flow_result$flow, "FLOW")
+  expect_manifest_audit(pie_result$pie, "PIE")
 })
 
 run_case("multi-KO expansion replicates full TPM for each association", {
