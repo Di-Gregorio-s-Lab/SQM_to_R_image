@@ -1423,6 +1423,187 @@ extract_taxonomy_plot_data <- function(plot_object, count) {
   plot_data
 }
 
+build_pathway_taxonomy_percent_table <- function(
+    sqm_object,
+    rank,
+    selected_samples,
+    top_n_taxa,
+    pathway_name) {
+  tax_table <- as.data.frame(sqm_object$orfs$tax, check.names = FALSE)
+  tpm_table <- as.data.frame(sqm_object$orfs$tpm, check.names = FALSE)
+
+  if (!rank %in% colnames(tax_table)) {
+    stop("Taxonomic rank not found in ORF taxonomy: ", rank, call. = FALSE)
+  }
+  validate_samples(selected_samples, colnames(tpm_table))
+  validate_positive_integer(top_n_taxa, "top_n_taxa")
+
+  tax_ids <- rownames(tax_table)
+  tpm_ids <- rownames(tpm_table)
+  if (is.null(tax_ids) || is.null(tpm_ids) ||
+      anyDuplicated(tax_ids) > 0L || anyDuplicated(tpm_ids) > 0L) {
+    stop("ORF taxonomy and TPM tables must have unique row names.", call. = FALSE)
+  }
+  if (!setequal(tax_ids, tpm_ids)) {
+    stop("ORF taxonomy and TPM tables contain different orf_id keys.", call. = FALSE)
+  }
+
+  tax_long <- tibble(
+    orf_id = tax_ids,
+    taxon = normalize_taxon_value(tax_table[[rank]])
+  )
+  if ("Other" %in% tax_long$taxon) {
+    stop("ORF taxonomy contains the reserved label 'Other'.", call. = FALSE)
+  }
+
+  tpm_long <- tpm_table |>
+    rownames_to_column("orf_id") |>
+    select("orf_id", all_of(selected_samples)) |>
+    pivot_longer(
+      cols = all_of(selected_samples),
+      names_to = "sample",
+      values_to = "tpm"
+    ) |>
+    mutate(tpm = as.numeric(.data$tpm))
+
+  invalid_tpm <- !is.na(tpm_long$tpm) &
+    (!is.finite(tpm_long$tpm) | tpm_long$tpm < 0)
+  if (any(invalid_tpm)) {
+    stop("ORF TPM values must be finite and non-negative.", call. = FALSE)
+  }
+
+  base_table <- tpm_long |>
+    mutate(tpm = replace_na(.data$tpm, 0)) |>
+    left_join(tax_long, by = "orf_id")
+
+  if (nrow(base_table) != nrow(tpm_long) || anyNA(base_table$taxon)) {
+    stop("ORF taxonomy join did not preserve every TPM row.", call. = FALSE)
+  }
+
+  taxon_totals <- base_table |>
+    group_by(.data$sample, .data$taxon) |>
+    summarise(taxon_tpm = sum(.data$tpm), .groups = "drop")
+  sample_denominators <- base_table |>
+    group_by(.data$sample) |>
+    summarise(pathway_tpm = sum(.data$tpm), .groups = "drop")
+
+  reserved_taxa <- c("Unclassified", "Unmapped")
+  top_taxa <- taxon_totals |>
+    filter(!.data$taxon %in% reserved_taxa, .data$taxon_tpm > 0) |>
+    group_by(.data$taxon) |>
+    summarise(total_tpm = sum(.data$taxon_tpm), .groups = "drop") |>
+    arrange(desc(.data$total_tpm), .data$taxon) |>
+    slice_head(n = top_n_taxa) |>
+    pull(.data$taxon)
+
+  positive_rows <- taxon_totals |>
+    left_join(sample_denominators, by = "sample") |>
+    filter(.data$pathway_tpm > 0, .data$taxon_tpm > 0) |>
+    mutate(
+      taxon = case_when(
+        .data$taxon %in% reserved_taxa ~ .data$taxon,
+        .data$taxon %in% top_taxa ~ .data$taxon,
+        TRUE ~ "Other"
+      )
+    ) |>
+    group_by(.data$sample, .data$taxon, .data$pathway_tpm) |>
+    summarise(taxon_tpm = sum(.data$taxon_tpm), .groups = "drop") |>
+    mutate(
+      value = 100 * .data$taxon_tpm / .data$pathway_tpm,
+      denominator = .data$pathway_tpm,
+      status = "ok",
+      plotted = TRUE
+    )
+
+  if (nrow(positive_rows) > 0L) {
+    percent_sums <- positive_rows |>
+      group_by(.data$sample) |>
+      summarise(percent_sum = sum(.data$value), .groups = "drop")
+    invalid_sums <- abs(percent_sums$percent_sum - 100) > 1e-6
+    if (any(invalid_sums)) {
+      stop(
+        "Pathway taxonomy percentages do not sum to 100 for samples: ",
+        paste(percent_sums$sample[invalid_sums], collapse = ", "),
+        call. = FALSE
+      )
+    }
+  }
+
+  zero_samples <- sample_denominators |>
+    filter(.data$pathway_tpm <= 0) |>
+    pull(.data$sample)
+  if (length(zero_samples) > 0L) {
+    for (sample_name in zero_samples) {
+      warning(
+        "Pathway TPM denominator is zero for pathway '", pathway_name,
+        "', sample '", sample_name, "', rank '", rank, "'.",
+        call. = FALSE
+      )
+    }
+  }
+
+  zero_rows <- tibble(
+    sample = zero_samples,
+    taxon = NA_character_,
+    pathway_tpm = 0,
+    taxon_tpm = 0,
+    value = NA_real_,
+    denominator = 0,
+    status = "zero_denominator",
+    plotted = FALSE
+  )
+
+  bind_rows(positive_rows, zero_rows) |>
+    mutate(
+      sample = factor(.data$sample, levels = selected_samples),
+      count = "percent",
+      rank = rank
+    ) |>
+    arrange(.data$sample, desc(.data$taxon_tpm), .data$taxon)
+}
+
+make_pathway_taxonomy_percent_plot <- function(
+    plot_tbl,
+    pathway_name,
+    rank,
+    selected_samples) {
+  plotted_rows <- plot_tbl |>
+    filter(.data$plotted, !is.na(.data$taxon), !is.na(.data$value)) |>
+    mutate(sample = factor(as.character(.data$sample), levels = selected_samples))
+
+  taxon_order <- plotted_rows |>
+    group_by(.data$taxon) |>
+    summarise(total_tpm = sum(.data$taxon_tpm), .groups = "drop") |>
+    arrange(desc(.data$total_tpm), .data$taxon) |>
+    pull(.data$taxon)
+  taxon_palette <- stats::setNames(
+    rep(colors_hex, length.out = length(taxon_order)),
+    taxon_order
+  )
+
+  plot_object <- ggplot(
+    plotted_rows,
+    aes(x = .data$sample, y = .data$value, fill = .data$taxon)
+  ) +
+    geom_col() +
+    scale_x_discrete(limits = selected_samples, drop = FALSE) +
+    labs(
+      title = paste0("Taxonomy - ", pathway_name),
+      subtitle = paste0("Pathway TPM composition at ", rank, " rank"),
+      x = "Sample",
+      y = "Percent of pathway TPM",
+      fill = rank
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+  if (length(taxon_palette) > 0L) {
+    plot_object <- plot_object + scale_fill_manual(values = taxon_palette)
+  }
+
+  plot_object
+}
+
 build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name, top_n_taxa) {
   rank_sym <- rlang::sym(rank_name)
 
@@ -2010,17 +2191,33 @@ run_taxonomy_scope <- function(
       }
       dir.create(rank_dir, recursive = TRUE, showWarnings = FALSE)
 
-      plot_object <- make_taxonomy_plot(
-        sqm_object = sqm_object,
-        rank = rank,
-        count = count,
-        selected_samples = selected_samples,
-        top_n_taxa = top_n_taxa,
-        ignore_unmapped = ignore_unmapped,
-        ignore_unclassified = ignore_unclassified
-      )
-
-      plot_data <- extract_taxonomy_plot_data(plot_object, count)
+      use_pathway_tpm_percent <- scope_name != "taxonomy_global" && identical(count, "percent")
+      if (use_pathway_tpm_percent) {
+        plot_data <- build_pathway_taxonomy_percent_table(
+          sqm_object = sqm_object,
+          rank = rank,
+          selected_samples = selected_samples,
+          top_n_taxa = top_n_taxa,
+          pathway_name = pathway_name
+        )
+        plot_object <- make_pathway_taxonomy_percent_plot(
+          plot_tbl = plot_data,
+          pathway_name = pathway_name,
+          rank = rank,
+          selected_samples = selected_samples
+        )
+      } else {
+        plot_object <- make_taxonomy_plot(
+          sqm_object = sqm_object,
+          rank = rank,
+          count = count,
+          selected_samples = selected_samples,
+          top_n_taxa = top_n_taxa,
+          ignore_unmapped = ignore_unmapped,
+          ignore_unclassified = ignore_unclassified
+        )
+        plot_data <- extract_taxonomy_plot_data(plot_object, count)
+      }
       data_file <- if (scope_name == "taxonomy_global") {
         file.path(rank_dir, paste0("taxonomy_global_", count, "_", rank, "_data.tsv"))
       } else {
