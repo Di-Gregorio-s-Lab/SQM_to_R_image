@@ -71,6 +71,14 @@ known_pathways <- tibble::tribble(
 default_pathway_ids <- known_pathways$pathway_id
 default_pathway_selection_modes <- c("defined", "top20")
 default_pathway_top_n <- 20L
+kegg_pathway_roots <- c(
+  "Metabolism",
+  "Genetic Information Processing",
+  "Environmental Information Processing",
+  "Cellular Processes",
+  "Organismal Systems",
+  "Human Diseases"
+)
 
 # ---- Command-line parsing and shared configuration -----------------------
 
@@ -139,7 +147,8 @@ print_help <- function() {
     "  --pathways=LIST            Comma-separated KEGG pathways.\n",
     "                             Accepts numeric codes (for example, 00361) or full names.\n",
     "  --pathway_selection_modes=LIST Default: defined,top20.\n",
-    "  --pathway_top_n=NUM        Default: 20.\n",
+    "                             top20 ranks only three-level KEGG PATHWAY entries.\n",
+    "  --pathway_top_n=NUM        Number of KEGG pathways ranked in top20; default: 20.\n",
     "  --samples=LIST             Comma-separated samples.\n",
     "  --tax_mode=MODE            Default: prokfilter.\n",
     "  --top_n_ko=NUM             Default: 20.\n",
@@ -534,14 +543,55 @@ resolve_pathways <- function(sqm, requested_pathways) {
   resolved[unique_by_name]
 }
 
-split_kegg_pathway_field <- function(pathway_field) {
-  pathway_values <- unlist(str_split(as.character(pathway_field), "\\s*\\|\\s*"), use.names = FALSE)
-  pathway_values <- pathway_values[!is.na(pathway_values) & nzchar(trimws(pathway_values))]
-  canonical_values <- map_chr(
-    str_split(pathway_values, "\\s*;\\s*"),
-    ~ trimws(.x[[length(.x)]])
+parse_kegg_pathway_entries <- function(pathway_field) {
+  empty_entries <- tibble::tibble(
+    pathway_root = character(),
+    pathway_category = character(),
+    canonical_pathway_name = character(),
+    is_pathway_map = logical()
   )
-  unique(canonical_values[nzchar(canonical_values)])
+  if (length(pathway_field) == 0L || all(is.na(pathway_field))) {
+    return(empty_entries)
+  }
+
+  pathway_values <- unlist(
+    str_split(as.character(pathway_field), "\\s*\\|\\s*"),
+    use.names = FALSE
+  )
+  pathway_values <- pathway_values[
+    !is.na(pathway_values) & nzchar(trimws(pathway_values))
+  ]
+  if (length(pathway_values) == 0L) {
+    return(empty_entries)
+  }
+
+  hierarchy_parts <- str_split(pathway_values, "\\s*;\\s*")
+  hierarchy_parts <- hierarchy_parts[lengths(hierarchy_parts) == 3L]
+  if (length(hierarchy_parts) == 0L) {
+    return(empty_entries)
+  }
+
+  entries <- tibble::tibble(
+    pathway_root = map_chr(hierarchy_parts, ~ trimws(.x[[1L]])),
+    pathway_category = map_chr(hierarchy_parts, ~ trimws(.x[[2L]])),
+    canonical_pathway_name = map_chr(hierarchy_parts, ~ trimws(.x[[3L]]))
+  ) |>
+    filter(
+      nzchar(.data$pathway_root),
+      nzchar(.data$pathway_category),
+      nzchar(.data$canonical_pathway_name)
+    ) |>
+    mutate(is_pathway_map = .data$pathway_root %in% kegg_pathway_roots) |>
+    distinct()
+
+  entries
+}
+
+split_kegg_pathway_field <- function(pathway_field) {
+  parse_kegg_pathway_entries(pathway_field) |>
+    filter(.data$is_pathway_map) |>
+    pull(.data$canonical_pathway_name) |>
+    unique()
 }
 
 pathway_id_for_name <- function(pathway_name) {
@@ -576,9 +626,40 @@ select_top_pathways <- function(sqm, selected_samples, pathway_top_n = default_p
   pathway_membership <- orf_table |>
     transmute(orf_id = .data$orf_id, KEGGPATH = as.character(.data$KEGGPATH)) |>
     filter(!is.na(.data$KEGGPATH)) |>
-    mutate(canonical_pathway_name = map(.data$KEGGPATH, split_kegg_pathway_field)) |>
-    tidyr::unnest_longer("canonical_pathway_name") |>
-    distinct(.data$orf_id, .data$canonical_pathway_name)
+    mutate(pathway_entry = map(.data$KEGGPATH, parse_kegg_pathway_entries)) |>
+    tidyr::unnest("pathway_entry") |>
+    filter(.data$is_pathway_map) |>
+    select(-"is_pathway_map") |>
+    distinct(
+      .data$orf_id,
+      .data$pathway_root,
+      .data$pathway_category,
+      .data$canonical_pathway_name
+    )
+
+  hierarchy_by_name <- pathway_membership |>
+    distinct(
+      .data$canonical_pathway_name,
+      .data$pathway_root,
+      .data$pathway_category
+    ) |>
+    count(.data$canonical_pathway_name, name = "hierarchy_count") |>
+    filter(.data$hierarchy_count > 1L)
+  if (nrow(hierarchy_by_name) > 0L) {
+    stop(
+      "Ambiguous KEGG pathway hierarchy for: ",
+      paste(hierarchy_by_name$canonical_pathway_name, collapse = "; "),
+      call. = FALSE
+    )
+  }
+
+  if (nrow(pathway_membership) == 0L) {
+    warning(
+      "No valid three-level KEGG PATHWAY entries were found for top20 selection.",
+      call. = FALSE
+    )
+    return(list())
+  }
 
   pathway_totals <- tpm_table |>
     pivot_longer(
@@ -588,9 +669,18 @@ select_top_pathways <- function(sqm, selected_samples, pathway_top_n = default_p
     ) |>
     filter(.data$sample %in% selected_samples) |>
     inner_join(pathway_membership, by = "orf_id", relationship = "many-to-many") |>
-    group_by(.data$canonical_pathway_name) |>
+    group_by(
+      .data$pathway_root,
+      .data$pathway_category,
+      .data$canonical_pathway_name
+    ) |>
     summarise(total_tpm = sum(as.numeric(.data$tpm), na.rm = TRUE), .groups = "drop") |>
-    arrange(desc(.data$total_tpm), .data$canonical_pathway_name) |>
+    arrange(
+      desc(.data$total_tpm),
+      .data$canonical_pathway_name,
+      .data$pathway_root,
+      .data$pathway_category
+    ) |>
     slice_head(n = pathway_top_n)
 
   map(seq_len(nrow(pathway_totals)), function(index) {
@@ -598,6 +688,8 @@ select_top_pathways <- function(sqm, selected_samples, pathway_top_n = default_p
     list(
       input_value = pathway_name,
       pathway_id = pathway_id_for_name(pathway_name),
+      pathway_root = pathway_totals$pathway_root[[index]],
+      pathway_category = pathway_totals$pathway_category[[index]],
       canonical_pathway_name = pathway_name,
       total_tpm = pathway_totals$total_tpm[[index]]
     )

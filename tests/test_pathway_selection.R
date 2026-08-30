@@ -36,7 +36,12 @@ stopifnot(grepl("pathway_selection_modes", invalid_selection_error, fixed = TRUE
 fake_sqm <- list(
   orfs = list(
     table = data.frame(
-      KEGGPATH = c("Alpha pathway", "Beta pathway", "Gamma pathway", "Alpha pathway"),
+      KEGGPATH = c(
+        "Metabolism; Test category; Alpha pathway",
+        "Metabolism; Test category; Beta pathway",
+        "Metabolism; Test category; Gamma pathway",
+        "Metabolism; Test category; Alpha pathway"
+      ),
       row.names = c("orf_a", "orf_b", "orf_c", "orf_d"),
       check.names = FALSE
     ),
