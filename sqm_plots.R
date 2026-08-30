@@ -513,9 +513,39 @@ format_display_percent <- function(x) {
 
 # Validate CLI numeric parameters before they affect data selection or output size.
 validate_positive_integer <- function(x, arg_name) {
-  if (is.na(x) || x <= 0 || x != as.integer(x)) {
+  if (
+    length(x) != 1L ||
+      is.na(x) ||
+      !is.finite(x) ||
+      x <= 0 ||
+      x > .Machine$integer.max ||
+      x != floor(x)
+  ) {
     stop(arg_name, " must be a positive integer.", call. = FALSE)
   }
+}
+
+parse_positive_integer_arg <- function(value, arg_name) {
+  if (
+    length(value) != 1L ||
+      is.na(value) ||
+      !is.character(value) ||
+      !grepl("^[0-9]+$", value)
+  ) {
+    stop(arg_name, " must be a positive integer string.", call. = FALSE)
+  }
+
+  numeric_value <- suppressWarnings(as.numeric(value))
+  if (
+    is.na(numeric_value) ||
+      !is.finite(numeric_value) ||
+      numeric_value <= 0 ||
+      numeric_value > .Machine$integer.max
+  ) {
+    stop(arg_name, " must be between 1 and ", .Machine$integer.max, ".", call. = FALSE)
+  }
+
+  as.integer(numeric_value)
 }
 
 # Resolve user-supplied pathway codes or names to canonical SQM pathway names.
@@ -3187,9 +3217,21 @@ main <- function() {
   }
 
   tax_mode <- if (is.null(named_args$tax_mode)) "prokfilter" else named_args$tax_mode
-  top_n_ko <- if (is.null(named_args$top_n_ko)) 20L else as.integer(named_args$top_n_ko)
-  top_n_taxa <- if (is.null(named_args$top_n_taxa)) 15L else as.integer(named_args$top_n_taxa)
-  pathway_top_n <- if (is.null(named_args$pathway_top_n)) default_pathway_top_n else as.integer(named_args$pathway_top_n)
+  top_n_ko <- if (is.null(named_args$top_n_ko)) {
+    20L
+  } else {
+    parse_positive_integer_arg(named_args$top_n_ko, "top_n_ko")
+  }
+  top_n_taxa <- if (is.null(named_args$top_n_taxa)) {
+    15L
+  } else {
+    parse_positive_integer_arg(named_args$top_n_taxa, "top_n_taxa")
+  }
+  pathway_top_n <- if (is.null(named_args$pathway_top_n)) {
+    default_pathway_top_n
+  } else {
+    parse_positive_integer_arg(named_args$pathway_top_n, "pathway_top_n")
+  }
   plot_dpi <- if (is.null(named_args$plot_dpi)) 600 else as.numeric(named_args$plot_dpi)
   validate_positive_integer(top_n_ko, "top_n_ko")
   validate_positive_integer(top_n_taxa, "top_n_taxa")
