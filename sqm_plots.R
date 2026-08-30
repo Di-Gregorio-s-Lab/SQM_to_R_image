@@ -371,6 +371,47 @@ save_html_widget <- function(widget, path) {
   path
 }
 
+normalize_manifest_ko_audit <- function(ko_audit = NULL) {
+  required_fields <- c(
+    "input_orf_count",
+    "excluded_orfs_without_ko",
+    "multi_ko_orf_count",
+    "orf_ko_association_count",
+    "multi_ko_policy",
+    "ko_denominator_basis"
+  )
+  if (is.null(ko_audit)) {
+    return(list(
+      input_orf_count = NA_integer_,
+      excluded_orfs_without_ko = NA_integer_,
+      multi_ko_orf_count = NA_integer_,
+      orf_ko_association_count = NA_integer_,
+      multi_ko_policy = NA_character_,
+      ko_denominator_basis = NA_character_
+    ))
+  }
+  if (!is.data.frame(ko_audit) || nrow(ko_audit) != 1L) {
+    stop("KO manifest audit must be a one-row table.", call. = FALSE)
+  }
+  missing_fields <- setdiff(required_fields, colnames(ko_audit))
+  if (length(missing_fields) > 0L) {
+    stop(
+      "KO manifest audit is missing fields: ",
+      paste(missing_fields, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  list(
+    input_orf_count = as.integer(ko_audit$input_orf_count[[1L]]),
+    excluded_orfs_without_ko = as.integer(ko_audit$excluded_orfs_without_ko[[1L]]),
+    multi_ko_orf_count = as.integer(ko_audit$multi_ko_orf_count[[1L]]),
+    orf_ko_association_count = as.integer(ko_audit$orf_ko_association_count[[1L]]),
+    multi_ko_policy = as.character(ko_audit$multi_ko_policy[[1L]]),
+    ko_denominator_basis = as.character(ko_audit$ko_denominator_basis[[1L]])
+  )
+}
+
 new_manifest_row <- function(
     script_name,
     project_dir,
@@ -394,7 +435,9 @@ new_manifest_row <- function(
     output_scope = NA_character_,
     filtered_taxon = NA_character_,
     filtered_taxon_rank = NA_character_,
-    pathway_id = NA_character_) {
+    pathway_id = NA_character_,
+    ko_audit = NULL) {
+  ko_audit_values <- normalize_manifest_ko_audit(ko_audit)
   tibble::tibble(
     script = script_name,
     project_dir = project_dir,
@@ -418,7 +461,13 @@ new_manifest_row <- function(
     dpi = dpi,
     output_scope = output_scope,
     filtered_taxon = filtered_taxon,
-    filtered_taxon_rank = filtered_taxon_rank
+    filtered_taxon_rank = filtered_taxon_rank,
+    input_orf_count = ko_audit_values$input_orf_count,
+    excluded_orfs_without_ko = ko_audit_values$excluded_orfs_without_ko,
+    multi_ko_orf_count = ko_audit_values$multi_ko_orf_count,
+    orf_ko_association_count = ko_audit_values$orf_ko_association_count,
+    multi_ko_policy = ko_audit_values$multi_ko_policy,
+    ko_denominator_basis = ko_audit_values$ko_denominator_basis
   )
 }
 
@@ -1012,8 +1061,10 @@ subset_sqm_by_taxon <- function(
   subset_sqm
 }
 
-# Build the canonical ORF × sample × KO table used by functional and flow plots.
-build_orf_long_table <- function(pathway_sqm, selected_samples) {
+# Build the canonical ORF × sample × KO table and its pre-expansion audit.
+# Every KO associated with an ORF receives the ORF's full TPM. Percentages
+# therefore use the expanded ORF × sample × KO table as their denominator.
+build_orf_long_result <- function(pathway_sqm, selected_samples) {
   orf_table <- as.data.frame(pathway_sqm$orfs$table, check.names = FALSE) |>
     tibble::rownames_to_column("orf_id")
   tax_table <- as.data.frame(pathway_sqm$orfs$tax, check.names = FALSE) |>
@@ -1050,8 +1101,19 @@ build_orf_long_table <- function(pathway_sqm, selected_samples) {
       `KEGG ID` = as.character(.data[["KEGG ID"]]),
       kegg_function_raw = as.character(.data[["KEGGFUN"]]),
       ec_codes = extract_ec_codes(.data[["KEGGFUN"]]),
-      KEGGPATH = as.character(.data[["KEGGPATH"]])
+      KEGGPATH = as.character(.data[["KEGGPATH"]]),
+      ko_ids = map(as.character(.data[["KEGG ID"]]), extract_ko_ids)
     )
+
+  ko_counts <- lengths(annotations$ko_ids)
+  ko_audit <- tibble::tibble(
+    input_orf_count = as.integer(nrow(annotations)),
+    excluded_orfs_without_ko = as.integer(sum(ko_counts == 0L)),
+    multi_ko_orf_count = as.integer(sum(ko_counts > 1L)),
+    orf_ko_association_count = as.integer(sum(ko_counts)),
+    multi_ko_policy = "full_tpm_per_ko",
+    ko_denominator_basis = "expanded_orf_sample_ko_tpm"
+  )
 
   tpm_long <- tpm_table |>
     select(all_of(c("orf_id", selected_samples))) |>
@@ -1082,14 +1144,7 @@ build_orf_long_table <- function(pathway_sqm, selected_samples) {
     joined$KEGGPATH[is.na(joined$KEGGPATH)] <- NA_character_
   }
 
-  no_ko_orfs <- joined |>
-    distinct(.data$orf_id, .data[["KEGG ID"]]) |>
-    mutate(has_ko = lengths(map(.data[["KEGG ID"]], extract_ko_ids)) > 0L) |>
-    filter(!.data$has_ko) |>
-    nrow()
-
   expanded <- joined |>
-    mutate(ko_ids = map(.data[["KEGG ID"]], extract_ko_ids)) |>
     filter(lengths(.data$ko_ids) > 0L) |>
     tidyr::unnest_longer(ko_ids, values_to = "ko_id") |>
     mutate(
@@ -1110,8 +1165,11 @@ build_orf_long_table <- function(pathway_sqm, selected_samples) {
       "ec_codes", "KEGGPATH", all_of(all_taxonomy_columns)
     )
 
-  attr(expanded, "excluded_orfs_without_ko") <- no_ko_orfs
-  expanded
+  list(data = expanded, audit = ko_audit)
+}
+
+build_orf_long_table <- function(pathway_sqm, selected_samples) {
+  build_orf_long_result(pathway_sqm, selected_samples)$data
 }
 
 # ---- Functional, flow, and taxonomy plot data ----------------------------
@@ -1405,7 +1463,7 @@ build_ko_legend_labels <- function(plot_tbl, selected_samples) {
       .groups = "drop"
     ) |>
     mutate(legend_label = glue("{ko_id} / EC {ko_ec} | {percents}")) |>
-    select(.data$ko_id, .data$legend_label) |>
+    select("ko_id", "legend_label") |>
     tibble::deframe()
 }
 
@@ -2258,7 +2316,8 @@ run_funz_mode <- function(
   )
   dir.create(pathway_dir, recursive = TRUE, showWarnings = FALSE)
 
-  orf_long <- build_orf_long_table(pathway_sqm, selected_samples)
+  orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  orf_long <- orf_long_result$data
   ko_lookup <- get_ko_name_lookup(pathway_sqm)
   plot_tbl <- build_ko_plot_table(
     orf_long = orf_long,
@@ -2290,7 +2349,8 @@ run_funz_mode <- function(
       output_scope = paste0("pathway_", pathway_selection),
       filtered_taxon = filtered_taxon,
       filtered_taxon_rank = filtered_taxon_rank,
-      pathway_id = pathway_id
+      pathway_id = pathway_id,
+      ko_audit = orf_long_result$audit
     )
   )
 
@@ -2329,7 +2389,8 @@ run_funz_mode <- function(
         output_scope = paste0("pathway_", pathway_selection),
         filtered_taxon = filtered_taxon,
         filtered_taxon_rank = filtered_taxon_rank,
-        pathway_id = pathway_id
+        pathway_id = pathway_id,
+        ko_audit = orf_long_result$audit
       )
     )
   }
@@ -2518,7 +2579,8 @@ run_flow_mode <- function(
     " | ranks=", paste(taxonomy_ranks, collapse = ","),
     " | samples=", paste(selected_samples, collapse = ",")
   )
-  orf_long <- build_orf_long_table(pathway_sqm, selected_samples)
+  orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  orf_long <- orf_long_result$data
   if (nrow(orf_long) == 0L) {
     warning("No positive ORF data for pathway ", pathway_name, ".", call. = FALSE)
     return(output_manifests)
@@ -2577,10 +2639,11 @@ run_flow_mode <- function(
           rank = rank,
           format = "tsv",
           dpi = plot_dpi,
-        output_scope = paste0("pathway_", pathway_selection),
+          output_scope = paste0("pathway_", pathway_selection),
           filtered_taxon = filtered_taxon,
           filtered_taxon_rank = filtered_taxon_rank,
-          pathway_id = pathway_id
+          pathway_id = pathway_id,
+          ko_audit = orf_long_result$audit
         )
       )
 
@@ -2619,7 +2682,8 @@ run_flow_mode <- function(
               output_scope = paste0("pathway_", pathway_selection),
               filtered_taxon = filtered_taxon,
               filtered_taxon_rank = filtered_taxon_rank,
-              pathway_id = pathway_id
+              pathway_id = pathway_id,
+              ko_audit = orf_long_result$audit
             )
           )
         }
@@ -2650,7 +2714,8 @@ run_flow_mode <- function(
             output_scope = paste0("pathway_", pathway_selection),
             filtered_taxon = filtered_taxon,
             filtered_taxon_rank = filtered_taxon_rank,
-            pathway_id = pathway_id
+            pathway_id = pathway_id,
+            ko_audit = orf_long_result$audit
           )
         )
       }
@@ -2962,7 +3027,8 @@ run_pie_mode <- function(
   )
   dir.create(pie_root, recursive = TRUE, showWarnings = FALSE)
 
-  orf_long <- build_orf_long_table(pathway_sqm, selected_samples)
+  orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  orf_long <- orf_long_result$data
   if (nrow(orf_long) == 0L) {
     warning("No positive ORF data for pathway ", pathway_name, ".", call. = FALSE)
     return(output_manifests)
@@ -3051,7 +3117,8 @@ run_pie_mode <- function(
             dpi = plot_dpi,
             output_scope = paste0("pathway_", pathway_selection),
             filtered_taxon = filtered_taxon,
-            filtered_taxon_rank = filtered_taxon_rank
+            filtered_taxon_rank = filtered_taxon_rank,
+            ko_audit = orf_long_result$audit
           )
         )
 
@@ -3094,7 +3161,8 @@ run_pie_mode <- function(
               dpi = plot_dpi,
               output_scope = paste0("pathway_", pathway_selection),
               filtered_taxon = filtered_taxon,
-              filtered_taxon_rank = filtered_taxon_rank
+              filtered_taxon_rank = filtered_taxon_rank,
+              ko_audit = orf_long_result$audit
             )
           )
         }
