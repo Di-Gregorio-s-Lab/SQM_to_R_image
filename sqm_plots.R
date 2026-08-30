@@ -2273,7 +2273,16 @@ make_pathway_taxonomy_percent_plot <- function(
   plot_object
 }
 
-build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name, top_n_taxa) {
+build_pie_chart_table <- function(
+    orf_long,
+    sample_name,
+    ko_id_filter,
+    rank_name,
+    top_n_taxa,
+    pathway_name = NA_character_,
+    pathway_id = NA_character_,
+    pathway_selection = NA_character_,
+    pathway_sample_tpm = NA_real_) {
   rank_sym <- rlang::sym(rank_name)
   ko_ec_lookup <- extract_ko_ec_lookup(orf_long)
   ko_ec <- ko_ec_lookup |>
@@ -2283,6 +2292,17 @@ build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name
     ko_ec <- NA_character_
   } else {
     ko_ec <- ko_ec[[1L]]
+  }
+  ko_descriptions <- orf_long |>
+    filter(.data$ko_id == ko_id_filter) |>
+    pull(.data$kegg_function) |>
+    as.character() |>
+    trimws()
+  ko_descriptions <- sort(unique(ko_descriptions[!is.na(ko_descriptions) & nzchar(ko_descriptions)]))
+  ko_name <- if (length(ko_descriptions) == 0L) {
+    ko_id_filter
+  } else {
+    paste(ko_descriptions, collapse = "; ")
   }
 
   base_tbl <- orf_long |>
@@ -2319,6 +2339,7 @@ build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name
   }
 
   plot_tbl |>
+    arrange(desc(.data$tpm), .data$taxon_rank) |>
     mutate(
       sample = sample_name,
       ko_id = ko_id_filter,
@@ -2326,21 +2347,76 @@ build_pie_chart_table <- function(orf_long, sample_name, ko_id_filter, rank_name
       total_tpm = sum(.data$tpm),
       pct = if_else(.data$total_tpm > 0, .data$tpm / .data$total_tpm, 0),
       label = if_else(.data$pct >= 0.03, as.character(.data$taxon_rank), ""),
-      taxon_rank = forcats::fct_reorder(.data$taxon_rank, .data$tpm, .desc = TRUE)
+      pathway = pathway_name,
+      pathway_id = pathway_id,
+      pathway_selection = pathway_selection,
+      rank = rank_name,
+      ko_name = ko_name,
+      ko_sample_tpm = .data$total_tpm,
+      pathway_sample_tpm = as.numeric(pathway_sample_tpm),
+      ko_pathway_percent = if_else(
+        !is.na(.data$pathway_sample_tpm) & .data$pathway_sample_tpm > 0,
+        .data$ko_sample_tpm / .data$pathway_sample_tpm * 100,
+        NA_real_
+      ),
+      taxon_order = dplyr::row_number(),
+      taxon_rank = factor(
+        as.character(.data$taxon_rank),
+        levels = unique(as.character(.data$taxon_rank))
+      )
     )
 }
 
-make_pie_plot <- function(
-    plot_data,
-    pathway_name,
-    sample_name,
-    ko_id,
-    ko_name,
-    rank_name,
-    ko_ec,
-    pathway_sample_tpm) {
-  total_tpm <- sum(plot_data$tpm)
-  pathway_contribution <- if_else(pathway_sample_tpm > 0, total_tpm / pathway_sample_tpm * 100, 0)
+make_pie_plot <- function(plot_data) {
+  required_columns <- c(
+    "taxon_rank", "tpm", "sample", "ko_id", "ec_codes", "pct", "label",
+    "pathway", "rank", "ko_name", "ko_sample_tpm", "pathway_sample_tpm",
+    "ko_pathway_percent", "taxon_order"
+  )
+  missing_columns <- setdiff(required_columns, colnames(plot_data))
+  if (length(missing_columns) > 0L) {
+    stop("PIE plot data missing columns: ", paste(missing_columns, collapse = ", "), call. = FALSE)
+  }
+  if (nrow(plot_data) == 0L) {
+    stop("PIE plot data cannot be empty.", call. = FALSE)
+  }
+
+  scalar_value <- function(column_name, allow_na = FALSE) {
+    values <- unique(plot_data[[column_name]])
+    if (allow_na && length(values) == 1L && is.na(values[[1L]])) {
+      return(values[[1L]])
+    }
+    if (length(values) != 1L || (!allow_na && is.na(values[[1L]]))) {
+      stop("PIE plot metadata must have one value for ", column_name, ".", call. = FALSE)
+    }
+    values[[1L]]
+  }
+
+  pathway_name <- as.character(scalar_value("pathway"))
+  sample_name <- as.character(scalar_value("sample"))
+  ko_id <- as.character(scalar_value("ko_id"))
+  ko_name <- as.character(scalar_value("ko_name"))
+  rank_name <- as.character(scalar_value("rank"))
+  ko_ec <- scalar_value("ec_codes", allow_na = TRUE)
+  total_tpm <- as.numeric(scalar_value("ko_sample_tpm"))
+  pathway_contribution <- as.numeric(scalar_value("ko_pathway_percent", allow_na = TRUE))
+
+  if (!isTRUE(all.equal(sum(as.numeric(plot_data$tpm)), total_tpm, tolerance = 1e-10))) {
+    stop("PIE exported TPM does not match ko_sample_tpm.", call. = FALSE)
+  }
+  taxon_order <- as.integer(plot_data$taxon_order)
+  if (anyNA(taxon_order) || anyDuplicated(taxon_order) > 0L) {
+    stop("PIE taxon_order must contain unique integers.", call. = FALSE)
+  }
+  ordered_levels <- as.character(plot_data$taxon_rank[order(taxon_order)])
+  plot_data <- plot_data |>
+    mutate(
+      taxon_rank = factor(
+        as.character(.data$taxon_rank),
+        levels = unique(ordered_levels)
+      )
+    ) |>
+    arrange(.data$taxon_order)
 
   plot_data_with_legend <- plot_data |>
     mutate(
@@ -2372,14 +2448,14 @@ make_pie_plot <- function(
     ) +
     scale_fill_manual(values = palette, labels = legend_labels, drop = FALSE) +
     labs(
-      title = glue::glue("Pathway: {pathway_name} - KO {ko_id}"),
-      subtitle = glue::glue(
+      title = as.character(glue::glue("Pathway: {pathway_name} - KO {ko_id}")),
+      subtitle = as.character(glue::glue(
         "Sample: {sample_name} | Rank: {rank_name} | total TPM = {format_display_number(total_tpm)} | pathway contribution: {format_display_number(pathway_contribution, suffix = '%')}"
-      ),
+      )),
       fill = rank_name,
       x = NULL,
       y = NULL,
-      caption = glue::glue("KO name: {ko_name}{if (!is.na(ko_ec) && nzchar(ko_ec)) paste0(' | EC: ', ko_ec) else ''}")
+      caption = as.character(glue::glue("KO name: {ko_name}{if (!is.na(ko_ec) && nzchar(ko_ec)) paste0(' | EC: ', ko_ec) else ''}"))
     ) +
     theme_minimal(base_size = 11) +
     theme(
@@ -3146,8 +3222,6 @@ run_pie_mode <- function(
     return(output_manifests)
   }
 
-  ko_names <- orf_long |>
-    distinct(.data$ko_id, .data$kegg_function)
   ko_ec_lookup <- extract_ko_ec_lookup(orf_long)
   pathway_sample_totals <- orf_long |>
     group_by(.data$sample) |>
@@ -3166,13 +3240,6 @@ run_pie_mode <- function(
     progress_message("PIE | pathway=", pathway_name, " | sample=", sample_name)
     sample_dir <- file.path(pie_root, sanitize_name(sample_name))
     for (ko_id_value in ko_ids) {
-      ko_name_row <- ko_names |>
-        filter(.data$ko_id == ko_id_value)
-      ko_name <- if (nrow(ko_name_row) > 0L && !is.na(ko_name_row$kegg_function[[1]])) {
-        ko_name_row$kegg_function[[1]]
-      } else {
-        ko_id_value
-      }
       ko_ec_row <- ko_ec_lookup |>
         filter(.data$ko_id == ko_id_value)
       ko_ec <- if (nrow(ko_ec_row) > 0L) ko_ec_row$ec_codes[[1]] else NA_character_
@@ -3193,7 +3260,11 @@ run_pie_mode <- function(
           sample_name = sample_name,
           ko_id_filter = ko_id_value,
           rank_name = rank_name,
-          top_n_taxa = top_n_taxa
+          top_n_taxa = top_n_taxa,
+          pathway_name = pathway_name,
+          pathway_id = pathway_id,
+          pathway_selection = pathway_selection,
+          pathway_sample_tpm = pathway_sample_tpm
         )
 
         if (nrow(plot_data) == 0L || sum(plot_data$tpm) <= 0) {
@@ -3234,16 +3305,7 @@ run_pie_mode <- function(
           )
         )
 
-        plot_object <- make_pie_plot(
-          plot_data = plot_data,
-          pathway_name = pathway_name,
-          sample_name = sample_name,
-          ko_id = ko_id_value,
-          ko_name = ko_name,
-          rank_name = rank_name,
-          ko_ec = ko_ec,
-          pathway_sample_tpm = pathway_sample_tpm
-        )
+        plot_object <- make_pie_plot(plot_data)
         progress_message("PIE | saving PNG | pathway=", pathway_name, " | sample=", sample_name, " | KO=", ko_id_value, " | rank=", rank_name)
         png_files <- save_png_dimensions(plot_object, ko_dir, data_file_stem, dimensions, plot_dpi)
 
