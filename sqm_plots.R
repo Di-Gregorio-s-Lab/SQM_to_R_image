@@ -3,19 +3,89 @@
 # The script loads a validated SQM project once, derives ORF-level data from
 # that object, and writes reproducible plots plus manifest files for each mode.
 # CLI mode names and output directory names are kept stable for compatibility.
-library(SQMtools)
-library(readr)
-library(dplyr)
-library(tidyr)
-library(tibble)
-library(stringr)
-library(ggplot2)
-library(ggalluvial)
-library(glue)
-library(purrr)
-library(plotly)
-library(htmlwidgets)
-library(scales)
+
+common_required_packages <- c(
+  "SQMtools", "readr", "dplyr", "tidyr", "tibble", "stringr",
+  "ggplot2", "glue", "purrr", "scales"
+)
+
+required_packages_for_mode <- function(mode, flowplot_formats = c("png", "html")) {
+  required <- common_required_packages
+  if (mode %in% c("all", "flow")) {
+    required <- c(required, "ggalluvial")
+    if ("html" %in% tolower(as.character(flowplot_formats))) {
+      required <- c(required, "plotly", "htmlwidgets")
+    }
+  }
+  if (mode %in% c("all", "pie")) {
+    required <- c(required, "forcats", "rlang")
+  }
+  if (mode %in% c("all", "pathview")) {
+    required <- c(required, "pathview")
+  }
+  unique(required)
+}
+
+check_required_packages <- function(required, mode, availability_fn = requireNamespace) {
+  available <- vapply(
+    required,
+    function(package_name) availability_fn(package_name, quietly = TRUE),
+    logical(1)
+  )
+  missing <- required[!available]
+  if (length(missing) > 0L) {
+    stop(
+      "Missing required R packages for mode ", mode, ": ",
+      paste(missing, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  invisible(required)
+}
+
+bootstrap_cli_value <- function(args, option_name) {
+  equals_prefix <- paste0("--", option_name, "=")
+  equals_match <- startsWith(args, equals_prefix)
+  if (any(equals_match)) {
+    return(sub(equals_prefix, "", args[which(equals_match)[[1L]]], fixed = TRUE))
+  }
+  separate_match <- which(args == paste0("--", option_name))
+  if (length(separate_match) > 0L && separate_match[[1L]] < length(args)) {
+    return(args[[separate_match[[1L]] + 1L]])
+  }
+  NULL
+}
+
+direct_cli_execution <- sys.nframe() == 0L
+bootstrap_args <- commandArgs(trailingOnly = TRUE)
+bootstrap_help <- direct_cli_execution &&
+  (length(bootstrap_args) == 0L || any(bootstrap_args %in% c("--help", "-h")))
+
+if (!bootstrap_help) {
+  bootstrap_mode <- if (direct_cli_execution) bootstrap_cli_value(bootstrap_args, "mode") else NULL
+  if (is.null(bootstrap_mode) || !nzchar(bootstrap_mode)) {
+    bootstrap_mode <- if (direct_cli_execution) "unspecified" else "source"
+  }
+  bootstrap_format_value <- if (direct_cli_execution) {
+    bootstrap_cli_value(bootstrap_args, "flowplot_formats")
+  } else {
+    NULL
+  }
+  bootstrap_formats <- if (is.null(bootstrap_format_value)) {
+    c("png", "html")
+  } else {
+    trimws(strsplit(bootstrap_format_value, ",", fixed = TRUE)[[1L]])
+  }
+  bootstrap_required <- if (direct_cli_execution) {
+    required_packages_for_mode(bootstrap_mode, bootstrap_formats)
+  } else {
+    common_required_packages
+  }
+  check_required_packages(bootstrap_required, bootstrap_mode)
+  suppressPackageStartupMessages(
+    invisible(lapply(common_required_packages, library, character.only = TRUE))
+  )
+}
 
 # Shared palette used by every plot to keep categories visually consistent.
 colors_hex <- c(
@@ -56,17 +126,23 @@ all_taxonomy_columns <- c(
 )
 
 # Curated pathway IDs supported by the explicit `defined` selection mode.
-known_pathways <- tibble::tribble(
-  ~pathway_id, ~canonical_pathway_name,
-  "00361", "Chlorocyclohexane and chlorobenzene degradation",
-  "00710", "Carbon fixation in photosynthetic organisms",
-  "00623", "Toluene degradation",
-  "00621", "Dioxin degradation",
-  "00625", "Chloroalkane and chloroalkene degradation",
-  "00630", "Glyoxylate and dicarboxylate metabolism",
-  "00633", "Nitrotoluene degradation",
-  "00910", "Nitrogen metabolism",
-  "00980", "Metabolism of xenobiotics by cytochrome P450"
+known_pathways <- data.frame(
+  pathway_id = c(
+    "00361", "00710", "00623", "00621", "00625",
+    "00630", "00633", "00910", "00980"
+  ),
+  canonical_pathway_name = c(
+    "Chlorocyclohexane and chlorobenzene degradation",
+    "Carbon fixation in photosynthetic organisms",
+    "Toluene degradation",
+    "Dioxin degradation",
+    "Chloroalkane and chloroalkene degradation",
+    "Glyoxylate and dicarboxylate metabolism",
+    "Nitrotoluene degradation",
+    "Nitrogen metabolism",
+    "Metabolism of xenobiotics by cytochrome P450"
+  ),
+  stringsAsFactors = FALSE
 )
 default_pathway_ids <- known_pathways$pathway_id
 default_pathway_selection_modes <- c("defined", "top20")
@@ -81,20 +157,6 @@ kegg_pathway_roots <- c(
 )
 
 # ---- Command-line parsing and shared configuration -----------------------
-
-check_required_packages <- function() {
-  required <- c(
-    "SQMtools", "readr", "dplyr", "tidyr", "tibble", "stringr", "ggplot2",
-    "ggalluvial", "glue", "purrr", "plotly", "htmlwidgets", "scales"
-  )
-  missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
-  if (length(missing) > 0L) {
-    stop(
-      "Missing R packages: ", paste(missing, collapse = ", "),
-      call. = FALSE
-    )
-  }
-}
 
 parse_named_args <- function(args) {
   named <- list()
@@ -3570,7 +3632,6 @@ write_combined_manifest <- function(output_dir) {
 
 # Validate inputs before loading SQM, then run only the requested analysis modes.
 main <- function() {
-  check_required_packages()
   progress_message("Starting script")
 
   args <- commandArgs(trailingOnly = TRUE)
