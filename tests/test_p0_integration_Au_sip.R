@@ -71,7 +71,7 @@ positive_rows <- taxonomy_table[taxonomy_table$status == "ok", , drop = FALSE]
 percent_sums <- tapply(positive_rows$value, positive_rows$sample, sum)
 stopifnot(length(percent_sums) > 0L)
 stopifnot(all(abs(percent_sums - 100) <= 1e-6))
-stopifnot(all(positive_rows$denominator == "pathway_tpm_same_sample"))
+stopifnot(all(positive_rows$denominator == positive_rows$pathway_tpm))
 
 message(
   "PASS: P0 integration checks completed | Bacillota ORFs=",
