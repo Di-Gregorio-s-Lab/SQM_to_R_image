@@ -1294,6 +1294,122 @@ make_enzyme_lineplot <- function(enzyme_tbl, title) {
     )
 }
 
+build_flow_ko_metadata <- function(orf_long, ko_lookup) {
+  required_columns <- c("ko_id", "kegg_function")
+  missing_columns <- setdiff(required_columns, colnames(orf_long))
+  if (length(missing_columns) > 0L) {
+    stop(
+      "FLOW KO metadata requires columns: ",
+      paste(missing_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  ko_metadata <- orf_long |>
+    transmute(
+      ko_id = as.character(.data$ko_id),
+      description = trimws(as.character(.data$kegg_function))
+    ) |>
+    mutate(
+      description = if_else(
+        is.na(.data$description) | !nzchar(.data$description),
+        NA_character_,
+        .data$description
+      )
+    ) |>
+    group_by(.data$ko_id) |>
+    summarise(
+      KO_name = {
+        descriptions <- sort(unique(stats::na.omit(.data$description)))
+        if (length(descriptions) == 0L) {
+          NA_character_
+        } else {
+          paste(descriptions, collapse = "; ")
+        }
+      },
+      .groups = "drop"
+    ) |>
+    arrange(.data$ko_id)
+
+  lookup_names <- unname(as.character(ko_lookup[ko_metadata$ko_id]))
+  lookup_names <- trimws(lookup_names)
+  lookup_names[is.na(lookup_names) | !nzchar(lookup_names)] <- NA_character_
+  ko_metadata$KO_name <- coalesce(
+    ko_metadata$KO_name,
+    lookup_names,
+    ko_metadata$ko_id
+  )
+
+  if (anyDuplicated(ko_metadata$ko_id) > 0L) {
+    stop("FLOW KO metadata keys must be unique.", call. = FALSE)
+  }
+
+  ko_metadata
+}
+
+join_flow_ko_metadata <- function(summary_tbl, ko_meta, tolerance = 1e-10) {
+  required_summary_columns <- c("sample", "taxon", "KO", "TPM")
+  missing_summary_columns <- setdiff(
+    required_summary_columns,
+    colnames(summary_tbl)
+  )
+  if (length(missing_summary_columns) > 0L) {
+    stop(
+      "FLOW summary is missing columns: ",
+      paste(missing_summary_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (!all(c("ko_id", "KO_name") %in% colnames(ko_meta))) {
+    stop("FLOW KO metadata must contain ko_id and KO_name.", call. = FALSE)
+  }
+  if (anyDuplicated(ko_meta$ko_id) > 0L) {
+    stop(
+      "FLOW KO metadata keys must be unique for a many-to-one join.",
+      call. = FALSE
+    )
+  }
+
+  key_columns <- c("sample", "taxon", "KO")
+  if (anyDuplicated(summary_tbl[key_columns]) > 0L) {
+    stop("FLOW summary keys must be unique before metadata join.", call. = FALSE)
+  }
+  before_keys <- summary_tbl[key_columns]
+  before_mass <- summary_tbl |>
+    group_by(.data$sample) |>
+    summarise(TPM = sum(.data$TPM), .groups = "drop") |>
+    arrange(.data$sample)
+
+  joined <- summary_tbl |>
+    left_join(
+      ko_meta,
+      by = c("KO" = "ko_id"),
+      relationship = "many-to-one"
+    )
+
+  after_mass <- joined |>
+    group_by(.data$sample) |>
+    summarise(TPM = sum(.data$TPM), .groups = "drop") |>
+    arrange(.data$sample)
+  keys_unchanged <- identical(joined[key_columns], before_keys)
+  mass_unchanged <- identical(after_mass$sample, before_mass$sample) &&
+    isTRUE(all.equal(
+      after_mass$TPM,
+      before_mass$TPM,
+      tolerance = tolerance,
+      check.attributes = FALSE
+    ))
+
+  if (nrow(joined) != nrow(summary_tbl) || !keys_unchanged || !mass_unchanged) {
+    stop(
+      "FLOW metadata join postcondition failed: keys, rows, or TPM mass changed.",
+      call. = FALSE
+    )
+  }
+
+  joined
+}
+
 build_flow_table_for_rank <- function(orf_long, rank, selected_samples, top_n_taxa, top_n_ko, ko_lookup) {
   top_taxa <- orf_long |>
     filter(.data$sample %in% selected_samples) |>
@@ -1321,19 +1437,17 @@ build_flow_table_for_rank <- function(orf_long, rank, selected_samples, top_n_ta
     summarise(TPM = sum(.data$tpm), .groups = "drop") |>
     filter(.data$TPM > 0)
 
-  ko_meta <- orf_long |>
-    distinct(.data$ko_id, .data$kegg_function)
+  ko_meta <- build_flow_ko_metadata(orf_long, ko_lookup)
 
   summary_tbl |>
-    left_join(ko_meta, by = c("KO" = "ko_id")) |>
+    join_flow_ko_metadata(ko_meta) |>
     mutate(
       KO_name = if_else(
         .data$KO == "Other",
         "Other KOs",
-        coalesce(.data$kegg_function, unname(as.character(ko_lookup[.data$KO])), .data$KO)
+        coalesce(.data$KO_name, .data$KO)
       )
-    ) |>
-    select(-"kegg_function")
+    )
 }
 
 build_flow_table_for_sample <- function(flow_rank_table, pathway_name, rank, sample_name) {
