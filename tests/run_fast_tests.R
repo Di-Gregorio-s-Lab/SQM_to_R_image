@@ -4,7 +4,10 @@ test_files <- list.files(
   full.names = TRUE
 )
 
-excluded_tests <- c("test_p0_integration_Au_sip.R")
+excluded_tests <- c(
+  "test_p0_integration_Au_sip.R",
+  "test_p1_integration_Au_sip.R"
+)
 test_files <- test_files[!basename(test_files) %in% excluded_tests]
 test_files <- sort(test_files)
 
