@@ -595,6 +595,51 @@ split_kegg_pathway_field <- function(pathway_field) {
     unique()
 }
 
+parse_kegg_pathway_membership <- function(orf_ids, pathway_fields) {
+  if (length(orf_ids) != length(pathway_fields)) {
+    stop("orf_ids and pathway_fields must have the same length.", call. = FALSE)
+  }
+
+  empty_membership <- tibble::tibble(
+    orf_id = character(),
+    pathway_root = character(),
+    pathway_category = character(),
+    canonical_pathway_name = character(),
+    is_pathway_map = logical()
+  )
+  if (length(orf_ids) == 0L) {
+    return(empty_membership)
+  }
+
+  entries_by_orf <- str_split(as.character(pathway_fields), "\\s*\\|\\s*")
+  membership_index <- tibble::tibble(
+    orf_id = rep(as.character(orf_ids), lengths(entries_by_orf)),
+    hierarchy_entry = trimws(unlist(entries_by_orf, use.names = FALSE))
+  ) |>
+    filter(!is.na(.data$hierarchy_entry) & nzchar(.data$hierarchy_entry))
+  if (nrow(membership_index) == 0L) {
+    return(empty_membership)
+  }
+
+  unique_entries <- unique(membership_index$hierarchy_entry)
+  parsed_entries <- map_dfr(unique_entries, function(hierarchy_entry) {
+    parse_kegg_pathway_entries(hierarchy_entry) |>
+      mutate(hierarchy_entry = hierarchy_entry, .before = 1L)
+  })
+  if (nrow(parsed_entries) == 0L) {
+    return(empty_membership)
+  }
+
+  membership_index |>
+    inner_join(
+      parsed_entries,
+      by = "hierarchy_entry",
+      relationship = "many-to-one"
+    ) |>
+    select(-"hierarchy_entry") |>
+    distinct()
+}
+
 pathway_id_for_name <- function(pathway_name) {
   match <- known_pathways |>
     filter(tolower(.data$canonical_pathway_name) == tolower(pathway_name))
@@ -624,11 +669,10 @@ select_top_pathways <- function(sqm, selected_samples, pathway_top_n = default_p
   }
   validate_samples(selected_samples, colnames(tpm_table))
 
-  pathway_membership <- orf_table |>
-    transmute(orf_id = .data$orf_id, KEGGPATH = as.character(.data$KEGGPATH)) |>
-    filter(!is.na(.data$KEGGPATH)) |>
-    mutate(pathway_entry = map(.data$KEGGPATH, parse_kegg_pathway_entries)) |>
-    tidyr::unnest("pathway_entry") |>
+  pathway_membership <- parse_kegg_pathway_membership(
+    orf_table$orf_id,
+    orf_table$KEGGPATH
+  ) |>
     filter(.data$is_pathway_map) |>
     select(-"is_pathway_map") |>
     distinct(
