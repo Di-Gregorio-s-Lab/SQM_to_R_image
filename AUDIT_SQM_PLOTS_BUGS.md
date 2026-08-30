@@ -309,17 +309,18 @@ Risultati finali osservati, sempre tramite `rtk`:
 
 Non e' stata eseguita una run completa `--mode=all`: P2 resta aperto. La run candidata P1 non approva gli output storici. Il difetto dei nomi PNG troncati su percorsi Windows lunghi resta P3; il fatto che i nomi brevi del candidato P1 esistano non costituisce una correzione di quel difetto.
 
-## P2 - Correttezza e completezza semantica
+## P2 - Corretto su `fix/p2-correctness`
 
 ### BUG-P2-01: `Unclassified` confluisce in `Other`
 
-Severita': media-alta. Stato: verificato.
+Severita': media-alta. Stato: corretto e verificato su `fix/p2-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:436-440`: `normalize_taxon_value()` crea `Unclassified`.
-- `sqm_plots.R:1158`: nei flow, ogni taxon fuori Top N diventa `Other`, incluso `Unclassified` se non e' nel Top N.
-- `sqm_plots.R:1408-1420`: nei pie, i taxa fuori Top N diventano `Other`.
+- `sqm_plots.R:504-549`: helper condivisi per Top N sui soli taxa classificati, categoria `Unclassified` preservata e valore sorgente `Other` rifiutato.
+- `sqm_plots.R:1755-1774`: FLOW applica il collasso tassonomico condiviso.
+- `sqm_plots.R:2210-2224`: PIE applica la stessa semantica.
+- `tests/test_p2_reserved_taxa.R`: regressione sintetica comune a FLOW e PIE.
 - `REGOLE_SCRIPT_R_SQUEEZEMETA.md:226-238`: `Unclassified` e `Other` devono restare categorie distinte.
 
 Impatto:
@@ -337,17 +338,19 @@ Direzione di correzione:
 
 ### BUG-P2-02: associazioni multi-EC conservate solo parzialmente
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato su `fix/p2-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:848-853`: `extract_ko_ec_lookup()`.
-- `sqm_plots.R:880-885` e `sqm_plots.R:906-910`: `build_ko_plot_table()` usa `first(na.omit(ec_codes))`.
-- `sqm_plots.R:2243-2313`: PIE usa EC e nome KO in file stem, subtitle/caption e manifest.
+- `sqm_plots.R:485-497`: estrazione esclusiva dal blocco `[EC:...]` di `KEGGFUN`.
+- `sqm_plots.R:1194-1235`: `extract_ko_ec_lookup()` produce una riga per KO con codici distinti, ordinati e concatenati.
+- `sqm_plots.R:1259-1455`: FUNZ usa il lookup molti-a-uno con postcondizioni su chiavi, righe e TPM.
+- `sqm_plots.R:2185-2240`: PIE usa e propaga lo stesso elenco EC completo.
+- `tests/test_p2_multi_ec.R`: regressioni per codici duplicati, mancanti, incompleti e join conservativi.
 
 Prova:
 
-- Nel dataset reale sono stati osservati 78 KO con piu' associazioni EC.
+- Il valore storico `78` non aveva una granularita' documentata. Il controllo token-level indipendente corrente osserva 493 KO con piu' EC distinti nel progetto completo e 3 nel pathway `00710`; l'integrazione ricalcola il valore senza hardcodarlo nello script.
 
 Impatto:
 
@@ -364,13 +367,13 @@ Test di regressione:
 
 ### BUG-P2-03: sample senza TPM positivo interrompe FUNZ
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato su `fix/p2-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:877-954`: `build_ko_plot_table()`.
-- `sqm_plots.R:947-954`: percentuale 0 per sample vuoto, poi `validate_percent_sum(... expected = 100)`.
-- `sqm_plots.R:863-874`: `validate_percent_sum()` fa `stop()` se la somma differisce da 100.
+- `sqm_plots.R:1259-1455`: `build_ko_plot_table()` aggiunge denominatore, stato, flag `plotted` e sentinelle zero-denominator.
+- `sqm_plots.R:2309-2383`: FUNZ scrive sempre il TSV e salta soltanto il PNG quando tutti i sample sono vuoti.
+- `tests/test_p2_funz_zero.R`: copre sample positivo+zero, asse completo e caso all-zero.
 
 Impatto:
 
@@ -382,12 +385,13 @@ Test di regressione:
 
 ### BUG-P2-04: CLI accetta interi frazionari troncati
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato su `fix/p2-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:455-459`: `validate_positive_integer()`.
-- `sqm_plots.R:2464-2471`: `top_n_ko`, `top_n_taxa`, `pathway_top_n` vengono convertiti con `as.integer()` prima della validazione.
+- `sqm_plots.R:577-598`: `parse_positive_integer_arg()` valida la stringa grezza prima della coercizione.
+- `sqm_plots.R:3312-3326`: i tre argomenti interi sono risolti prima di creare `output_dir` e prima di `loadSQM()`.
+- `tests/test_p2_cli_integer.R`: copre valori validi, frazionari, notazione scientifica, segni, whitespace, zero e overflow, inclusa la precedenza sugli effetti collaterali.
 
 Prova:
 
@@ -403,12 +407,15 @@ Test di regressione:
 
 ### BUG-P2-05: policy multi-KO ed esclusioni ORF non compaiono nei manifest
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato su `fix/p2-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:812-833`: `build_orf_long_table()` espande ORF multi-KO e salva `excluded_orfs_without_ko` come attributo.
-- `sqm_plots.R:362-409`: `new_manifest_row()` non include campi per policy multi-KO o conteggi esclusi.
+- `sqm_plots.R:374-413`: validazione e normalizzazione dell'audit destinato ai manifest.
+- `sqm_plots.R:415-482`: `new_manifest_row()` aggiunge i sei campi P2 in modo append-only.
+- `sqm_plots.R:1064-1177`: audit pre-espansione strutturato e tabella ORF x sample x KO con TPM intero per associazione.
+- `sqm_plots.R:2340-2379`, `2603-2677` e `3051-3152`: propagazione nei manifest FUNZ, FLOW e PIE.
+- `tests/test_p2_ko_provenance.R`: conteggi indipendenti, replica TPM e round-trip dei manifest dei tre modi.
 - `REGOLE_SCRIPT_R_SQUEEZEMETA.md:208-222`: il comportamento multi-KO deve essere esplicito e tracciabile.
 
 Impatto:
@@ -427,6 +434,44 @@ Direzione di correzione:
 Test di regressione:
 
 - Manifest o audit TSV devono includere policy multi-KO e conteggio ORF senza KO per sezione/pathway.
+
+## Evidenza di chiusura P2 - 2026-08-30
+
+Branch: `fix/p2-correctness`, creato da `812171f`.
+
+Checkpoint TDD e implementazione:
+
+- `ab0d9ea`: preparazione harness P2;
+- `07e773c` / `57d2290`: RED/GREEN per categorie tassonomiche riservate;
+- `facc8f7` / `840e456`: RED/GREEN per lookup multi-EC deterministico;
+- `ef63d06` / `9ee2ef2`: RED/GREEN per sample FUNZ con denominatore zero;
+- `30a97cf` / `f61454f`: RED/GREEN per parsing CLI degli interi;
+- `6089c40`, `0aa0955` / `116d4c2`: RED e GREEN per audit multi-KO e propagazione nei manifest;
+- `8a194aa`: compatibilita' del lookup EC con fixture tassonomiche prive della colonna `ec_codes`;
+- `39f3848`: audit KO estratto senza espandere l'intero SQM;
+- `1a00ee3`: integrazione reale P2;
+- `38b9daa`: gate di copertura P2;
+- `b0db380`: verificatore parametrico delle tre run candidate.
+
+Risultati finali osservati, sempre tramite `rtk`:
+
+- `tests/run_fast_tests.R`: exit `0`, 15 file di test veloci completati;
+- `tests/check_p0_coverage.R`: exit `0`, funzioni P0 tra 84.21% e 100%, baseline globale informativa 8.94%;
+- `tests/check_p1_coverage.R`: exit `0`, funzioni P1 tra 84.62% e 100%, baseline globale informativa 13.34%;
+- `tests/check_p2_coverage.R`: exit `0`, funzioni P2 tra 85.71% e 100%, baseline globale informativa 16.09%; `covr` 3.6.5;
+- `tests/test_p0_integration_Au_sip.R`: exit `0`, 88258 ORF Bacillota e invarianti P0 ancora verdi;
+- `tests/test_p1_integration_Au_sip.R`: exit `0`, `global_top20=20`, `Bacillota_top20=20` e invarianti P1 ancora verdi;
+- `tests/test_p2_integration_Au_sip.R`: exit `0`, `multi_ec_00710=3`, `excluded_orfs_without_ko=705510`, `multi_ko_orfs=1317`; distinzione FLOW `Unclassified`/`Other`, lookup EC e audit confrontati con riferimenti indipendenti;
+- il warning di compatibilita' progetto SqueezeMeta 1.7.3.alpha3/SQMtools 1.7.2 e' rimasto visibile in tutte le integrazioni reali;
+- run FLOW `00361` in `out/p2_candidate_20260830_01_flow`: exit `0`, tre TSV e tre PNG, 114 righe FLOW complessive, chiavi univoche e somme `flow_percent=100` per sample;
+- run FUNZ `00710` in `out/p2_candidate_20260830_01_funz`: exit `0`, 99 righe pathway, denominatori coerenti e 3 KO multi-EC completi;
+- run PIE `00633` / `S13_1_8` in `out/p2_candidate_20260830_01_pie`: exit `0`, 11 TSV e 11 PNG; `K10679` conserva `1.-.-.-;1.5.1.34` nel TSV e nel manifest;
+- `tests/verify_p2_candidate_outputs.R`: exit `0` sulle tre directory candidate;
+- review spec indipendente: nessun rilievo CRITICAL, HIGH, MEDIUM o LOW; review standard: nessun rilievo CRITICAL/HIGH.
+
+Note di review non bloccanti: `sqm_plots.R` resta un monolite preesistente oltre il limite generale indicato da AGENTS.md e merita un refactor separato; nei contesti FLOW/PIE senza alcuna ORF con KO l'audit viene calcolato ma, non essendoci alcun artefatto, non nasce una riga manifest che lo serializzi. Quest'ultimo caso limite non riguarda i flussi P2 richiesti e puo' essere reso esplicito in un futuro audit TSV senza cambiare il significato dei manifest come inventario di file.
+
+Non e' stata eseguita una run `--mode=all`. Gli output storici non sono stati modificati o approvati. Le directory candidate P2 restano evidenza locale, non output storici approvati. Il problema Windows dei nomi PNG troncati resta P3 e non e' stato corretto ne' usato per ampliare P2.
 
 ## P3 - Igiene output, dipendenze e portabilita'
 
