@@ -345,12 +345,102 @@ progress_message <- function(..., .prefix = "[sqm_plots]") {
   message(.prefix, " ", paste0(..., collapse = ""))
 }
 
-save_png_dimensions <- function(plot_object, output_dir, file_stem, dimensions, dpi) {
+stable_path_token <- function(value) {
+  bytes <- as.integer(charToRaw(enc2utf8(as.character(value))))
+  rolling_hash <- function(seed, multiplier, modulus) {
+    hash_value <- seed
+    for (byte in bytes) {
+      hash_value <- (hash_value * multiplier + byte + 1) %% modulus
+    }
+    sprintf("%08x", as.integer(hash_value))
+  }
+
+  paste0(
+    substr(rolling_hash(17, 131, 2147483629), 1L, 6L),
+    substr(rolling_hash(23, 137, 2147483587), 1L, 6L)
+  )
+}
+
+portable_png_output_path <- function(
+    output_dir,
+    file_stem,
+    dimension_name,
+    max_path_length = 240L) {
+  if (length(max_path_length) != 1L || is.na(max_path_length) || max_path_length <= 0) {
+    stop("max_path_length must be one positive number.", call. = FALSE)
+  }
+
+  output_dir_abs <- normalizePath(output_dir, winslash = "/", mustWork = TRUE)
+  logical_filename <- paste0(file_stem, "_", dimension_name, ".png")
+  logical_path <- file.path(output_dir, logical_filename)
+  logical_path_abs <- normalizePath(logical_path, winslash = "/", mustWork = FALSE)
+  if (nchar(logical_path_abs, type = "chars") <= max_path_length) {
+    return(logical_path)
+  }
+
+  readable_stem <- sanitize_name(file_stem)
+  if (!nzchar(readable_stem)) {
+    readable_stem <- "plot"
+  }
+  token <- stable_path_token(logical_filename)
+  semantic_suffix <- paste0("_", dimension_name, ".png")
+  fixed_length <- 2L + nchar(token, type = "chars") + nchar(semantic_suffix, type = "chars")
+  filename_budget <- as.integer(max_path_length) - nchar(output_dir_abs, type = "chars") - 1L
+  prefix_budget <- filename_budget - fixed_length
+  if (prefix_budget < 1L) {
+    stop(
+      "output_dir is too long for a portable PNG filename; choose a shorter output_dir: ",
+      output_dir_abs,
+      call. = FALSE
+    )
+  }
+
+  compact_filename <- paste0(
+    substr(readable_stem, 1L, prefix_budget),
+    "__", token, semantic_suffix
+  )
+  compact_path <- file.path(output_dir, compact_filename)
+  compact_path_abs <- normalizePath(compact_path, winslash = "/", mustWork = FALSE)
+  if (nchar(compact_path_abs, type = "chars") > max_path_length) {
+    stop(
+      "output_dir is too long for the compact PNG filename; choose a shorter output_dir: ",
+      output_dir_abs,
+      call. = FALSE
+    )
+  }
+
+  progress_message("Compacted PNG filename: ", logical_filename, " -> ", compact_filename)
+  compact_path
+}
+
+assert_output_artifact <- function(path, label = "Output artifact") {
+  if (!file.exists(path)) {
+    stop(label, " was not created at the requested path: ", path, call. = FALSE)
+  }
+  artifact_info <- suppressWarnings(file.info(path))
+  if (isTRUE(artifact_info$isdir[[1L]]) || is.na(artifact_info$size[[1L]]) || artifact_info$size[[1L]] <= 0) {
+    stop(label, " is not a non-empty regular file: ", path, call. = FALSE)
+  }
+  invisible(path)
+}
+
+save_png_dimensions <- function(
+    plot_object,
+    output_dir,
+    file_stem,
+    dimensions,
+    dpi,
+    max_path_length = 240L) {
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   output_files <- character()
   for (dim_name in names(dimensions)) {
     dims <- dimensions[[dim_name]]
-    output_file <- file.path(output_dir, paste0(file_stem, "_", dim_name, ".png"))
+    output_file <- portable_png_output_path(
+      output_dir,
+      file_stem,
+      dim_name,
+      max_path_length = max_path_length
+    )
     ggplot2::ggsave(
       filename = output_file,
       plot = plot_object,
@@ -360,6 +450,7 @@ save_png_dimensions <- function(plot_object, output_dir, file_stem, dimensions, 
       dpi = dpi,
       bg = "white"
     )
+    assert_output_artifact(output_file, "PNG output")
     output_files[[dim_name]] <- output_file
   }
   output_files
