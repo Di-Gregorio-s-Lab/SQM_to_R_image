@@ -1184,6 +1184,19 @@ get_ko_name_lookup <- function(pathway_sqm) {
 }
 
 extract_ko_ec_lookup <- function(orf_long) {
+  if (!"ko_id" %in% colnames(orf_long)) {
+    stop("KO EC lookup requires column: ko_id", call. = FALSE)
+  }
+  if (!"ec_codes" %in% colnames(orf_long)) {
+    return(
+      orf_long |>
+        transmute(ko_id = as.character(.data$ko_id)) |>
+        distinct(.data$ko_id) |>
+        mutate(ec_codes = NA_character_) |>
+        arrange(.data$ko_id)
+    )
+  }
+
   orf_long |>
     transmute(
       ko_id = as.character(.data$ko_id),
