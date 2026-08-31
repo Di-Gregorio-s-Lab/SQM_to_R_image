@@ -1,8 +1,8 @@
 # Audit bug `sqm_plots.R`
 
-> Stato del documento: handoff operativo, audit del 2026-08-30. Tutti i bug elencati sono ancora aperti nello snapshot corrente, salvo diversa annotazione. I numeri di linea si riferiscono allo script di 2866 righe presente al momento dell'audit e potranno spostarsi durante le correzioni: usare anche il nome della funzione indicato.
+> Stato del documento: audit e registro di chiusura del 2026-08-30. P0, P1, P2 e P3 sono stati corretti e verificati sui rispettivi branch, come annotato nelle sezioni di evidenza. Gli output storici restano prove read-only e non sono stati approvati retroattivamente. I numeri di linea originari possono essersi spostati durante le correzioni: usare anche il nome della funzione indicato.
 
-Questo documento guida la prossima sessione di correzione di `sqm_plots.R`. Non e' un semplice elenco: per ogni problema riporta il riferimento al codice, la prova osservata, l'effetto sui risultati, la direzione di correzione e il test che deve impedirne la ricomparsa.
+Questo documento ha guidato la correzione di `sqm_plots.R` e ora ne conserva le evidenze. Per ogni problema riporta il riferimento al codice, la prova osservata, l'effetto sui risultati, la correzione e il test che deve impedirne la ricomparsa.
 
 ## Leggere prima di usare gli output esistenti
 
@@ -34,7 +34,7 @@ Fonti di verita' da usare durante la correzione:
 - mapping KEGG ufficiali: <https://www.kegg.jp/pathway/map00710>, <https://www.kegg.jp/pathway/map00633> e <https://www.kegg.jp/pathway/map00910>;
 - implementazioni installate di SQMtools 1.7.2 per verificare la semantica di `plotTaxonomy()`, `subsetTax()` e `subsetORFs()`; non dedurla soltanto dal nome delle funzioni.
 
-## Indice rapido dei problemi aperti
+## Indice rapido dei problemi auditati
 
 | ID | Priorita' | Severita' | Risultato a rischio |
 |---|---:|---|---|
@@ -188,7 +188,7 @@ Verifiche osservate:
 - run CLI mirata in `out/p0_candidate_20260830_01`: exit `0`; il TSV percentuale pathway contiene denominatore, stato e flag `plotted`, con somma 100 per `S13_1_8`, `S13_2_8` e `S13_3_8`;
 - review indipendente: nessun rilievo CRITICAL/HIGH.
 
-Limitazione non-P0 riconfermata dalla run candidata: sul lungo percorso Windows del workspace il nome del PNG pathway e' stato troncato e il target previsto nel manifest non esiste. Il difetto resta sotto BUG-P3-01/portabilita' degli output; non altera il TSV e le invarianti scientifiche usate per chiudere P0, ma impedisce di considerare l'intera directory candidata un output finale approvato.
+Limitazione non-P0 riconfermata al checkpoint P0: sul lungo percorso Windows del workspace il nome del PNG pathway era stato troncato e il target previsto nel manifest non esisteva. Il difetto restava allora sotto BUG-P3-01/portabilita' degli output; non alterava il TSV e le invarianti scientifiche usate per chiudere P0, ma impediva di considerare l'intera directory candidata un output finale approvato. E' stato successivamente corretto e verificato in P3.
 
 ## P1 - Corretto su `fix/p1-correctness`
 
@@ -307,7 +307,7 @@ Risultati finali osservati, sempre tramite `rtk`:
 - run CLI mirata: exit `0` in `out/p1_candidate_20260830_01`, nove TSV FLOW e nove PNG per i tre pathway Bacillota; tutti i target del manifest esistono, le chiavi `sample/taxon/KO` sono univoche e `flow_percent` somma a 100 entro `1e-6` in ogni TSV;
 - review indipendente: nessun rilievo CRITICAL, HIGH o MEDIUM.
 
-Non e' stata eseguita una run completa `--mode=all`: P2 resta aperto. La run candidata P1 non approva gli output storici. Il difetto dei nomi PNG troncati su percorsi Windows lunghi resta P3; il fatto che i nomi brevi del candidato P1 esistano non costituisce una correzione di quel difetto.
+Al checkpoint P1 non era stata eseguita una run completa `--mode=all` e P2 restava aperto. La run candidata P1 non approvava gli output storici. Il difetto dei nomi PNG troncati su percorsi Windows lunghi restava P3; il fatto che i nomi brevi del candidato P1 esistessero non costituiva una correzione. Il difetto e' stato successivamente corretto e verificato in P3.
 
 ## P2 - Corretto su `fix/p2-correctness`
 
@@ -471,48 +471,56 @@ Risultati finali osservati, sempre tramite `rtk`:
 
 Note di review non bloccanti: `sqm_plots.R` resta un monolite preesistente oltre il limite generale indicato da AGENTS.md e merita un refactor separato; nei contesti FLOW/PIE senza alcuna ORF con KO l'audit viene calcolato ma, non essendoci alcun artefatto, non nasce una riga manifest che lo serializzi. Quest'ultimo caso limite non riguarda i flussi P2 richiesti e puo' essere reso esplicito in un futuro audit TSV senza cambiare il significato dei manifest come inventario di file.
 
-Non e' stata eseguita una run `--mode=all`. Gli output storici non sono stati modificati o approvati. Le directory candidate P2 restano evidenza locale, non output storici approvati. Il problema Windows dei nomi PNG troncati resta P3 e non e' stato corretto ne' usato per ampliare P2.
+Al checkpoint P2 non era stata eseguita una run `--mode=all`. Gli output storici non erano stati modificati o approvati. Le directory candidate P2 restano evidenza locale, non output storici approvati. Il problema Windows dei nomi PNG troncati restava P3 e non era stato corretto ne' usato per ampliare P2; e' stato successivamente corretto e verificato in P3.
 
-## P3 - Igiene output, dipendenze e portabilita'
+## P3 - Corretto su `fix/p3-correctness`
 
 ### BUG-P3-01: manifest storici mantengono riferimenti a file mancanti
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato su `fix/p3-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:2379-2389`: `read_section_manifest()` legge manifest esistente.
-- `sqm_plots.R:2392-2394`: `merge_section_manifest()` fa `bind_rows()` e `distinct(output_file)` senza verificare l'esistenza del target.
-- `sqm_plots.R:2408-2414`: `write_section_manifest()` riscrive il manifest unito.
+- `sqm_plots.R:3451-3550`: `manifest_target_status()`, `validate_current_manifest_targets()` e `prune_stale_manifest_targets()` distinguono target nuovi non validi da righe storiche stale.
+- `sqm_plots.R:3553-3638`: merge, scrittura delle sezioni, riconciliazione completa e rigenerazione di `manifest_all.tsv` operano soltanto su target relativi, regolari, esistenti e non vuoti.
+- `sqm_plots.R:412-515`: token deterministico, budgeting del path Windows e postcondizione successiva a `ggsave()` impediscono che un PNG troncato entri nel manifest.
+- `tests/test_p3_manifest_integrity.R` e `tests/test_p3_portable_png.R`: regressioni per target stale/nuovi, traversal, atomicita' del manifest, collisioni, determinismo e soglia di 240 caratteri.
 
 Prova:
 
-- L'audit precedente ha registrato 15 riferimenti a file mancanti nei manifest. Il difetto strutturale che li conserva e' stato riconfermato nel codice; ripetere il conteggio sulla directory scelta come baseline prima del fix, perche' il contenuto di `out/` puo' cambiare tra sessioni.
+- La baseline storica read-only ricontata prima del fix contiene 18 target mancanti nei manifest di sezione e un riferimento a manifest mancante in `manifest_all.tsv`. Nessuno di questi file o manifest storici e' stato modificato.
+- Il nuovo verificatore parametrico ha osservato zero target mancanti nei tre candidati P3.
 
 Impatto:
 
 - Il manifest non e' un inventario affidabile degli output presenti.
 
-Test di regressione:
+Correzione verificata:
 
-- Dopo ogni run, ogni `output_file` nei manifest deve esistere rispetto alla base del manifest.
+- I target della run corrente vengono validati prima della riscrittura; un target nuovo mancante, assoluto o fuori root interrompe la run lasciando invariato il manifest esistente.
+- Le righe storiche stale vengono rimosse con warning senza cancellare o ricreare gli output interessati.
+- Tutte le sezioni presenti vengono riconciliate e `manifest_all.tsv` viene rigenerato da zero includendo soltanto manifest validi e non vuoti.
+- I PNG mantengono il nome logico quando il path previsto non supera 240 caratteri; oltre soglia viene accorciato soltanto il filename con token deterministico a 12 cifre esadecimali e viene verificato il file fisico esatto e non vuoto.
 
 ### BUG-P3-02: TSV PIE incompleto rispetto ai dati usati nel grafico
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato su `fix/p3-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:1392-1432`: `build_pie_chart_table()` produce taxa, TPM e percentuali.
-- `sqm_plots.R:2243-2313`: `run_pie_mode()` usa anche pathway denominator, contributo KO, nome KO ed EC per subtitle/caption/file stem.
+- `sqm_plots.R:2338-2428`: `build_pie_chart_table()` esporta, in modo append-only, pathway, ID, selezione, rank, nome KO, denominatori, contributo KO e ordine tassonomico.
+- `sqm_plots.R:2432-2490`: `make_pie_plot(plot_data)` riceve soltanto la tabella esportata e deriva da essa titolo, sottotitolo, caption, legenda e ordine.
+- `sqm_plots.R:3320-3370`: `run_pie_mode()` scrive il TSV e costruisce il grafico dalla stessa tabella esportata; i test la rileggono per verificare il round-trip.
+- `tests/test_p3_pie_export.R` e `tests/test_p3_integration_Au_sip.R`: regressione sintetica e confronto reale dei denominatori calcolati indipendentemente.
 
 Impatto:
 
 - Il TSV non basta a ricostruire completamente il grafico e le sue annotazioni.
 
-Test di regressione:
+Correzione verificata:
 
-- TSV PIE deve contenere almeno denominatore pathway del sample, contributo KO al pathway, nome KO ed EC usati nel grafico.
+- Il TSV PIE conserva le colonne precedenti e aggiunge `pathway`, `pathway_id`, `pathway_selection`, `rank`, `ko_name`, `ko_sample_tpm`, `pathway_sample_tpm`, `ko_pathway_percent` e `taxon_order`.
+- Un round-trip TSV produce le stesse annotazioni, lo stesso ordine e la stessa massa TPM della tabella in memoria.
 
 ### BUG-P3-03: `pathview_is_exportable("defined", NA)` restituisce true
 
@@ -520,70 +528,72 @@ Severita': media. Stato: corretto insieme a BUG-P0-01 su `fix/p0-correctness` (2
 
 Riferimenti:
 
-- `sqm_plots.R:275-276`: `pathview_is_exportable()`.
-- `sqm_plots.R:2111-2116`: `run_pathview_mode()` esegue `stop()` se `pathway_id` e' `NA` o vuoto.
-- `tests/test_pathway_selection.R:85-86`: test corrente accetta `defined, NA` come exportable.
+- `sqm_plots.R:347-356`: `pathview_is_exportable()` richiede un ID conforme a `^[0-9]{5}$`.
+- `sqm_plots.R:4024-4035`: la pipeline emette warning e salta soltanto Pathview quando l'ID non e' esportabile.
+- `tests/test_p0_pathway_mapping.R` e `tests/test_pathway_selection.R`: `top20 + NA` e `defined + NA` sono falsi, mentre `defined + "00910"` e' vero.
 
 Impatto:
 
 - Un pathway valido per nome completo ma fuori dai nove curati puo' superare il gate in `run_pipeline()` e arrivare a `run_pathview_mode()` senza ID esportabile, causando un errore invece di uno skip controllato.
 
-Direzione di correzione:
+Correzione verificata:
 
 - Definire l'esportabilita' in base alla presenza di un `pathway_id` KEGG valido, non in base al solo tipo `defined`/`top20`.
 - Se il nome e' risolvibile in modo affidabile, assegnare l'ID prima del gate; altrimenti emettere warning e saltare Pathview senza fermare le altre modalita'.
 
-Test di regressione:
+Test di regressione mantenuto:
 
 - Casi minimi espliciti: `top20 + NA -> FALSE`, `defined + NA -> FALSE`, `defined + "00710" -> TRUE`.
 - Un pathway senza ID deve produrre uno skip controllato della sola sezione Pathview, non uno `stop()` dell'intera run.
 
 ### BUG-P3-04: preflight package inefficace e incompleto
 
-Severita': media-bassa. Stato: verificato.
+Severita': media-bassa. Stato: corretto e verificato su `fix/p3-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `sqm_plots.R:1-40`: i package sono caricati prima di `check_required_packages()`.
-- `sqm_plots.R:2421-2423`: `main()` chiama `check_required_packages()` solo dopo il caricamento globale.
-- Package usati ma da verificare nel preflight: `forcats`, `rlang`, dipendenze Pathview.
+- `sqm_plots.R:7-29`: elenco comune e `required_packages_for_mode()` selezionano le dipendenze contestuali di FLOW, HTML, PIE e Pathview.
+- `sqm_plots.R:29-47`: `check_required_packages()` aggrega le dipendenze mancanti in un unico errore controllato.
+- `sqm_plots.R:49-86`: parsing bootstrap base-R, help/no-arg e preflight vengono eseguiti prima di qualsiasi `library()`.
+- `tests/test_p3_preflight.R`: subprocess con libreria utente vuota verifica help/no-arg e fallimento analitico prima di `output_dir` e `loadSQM()`.
 
 Impatto:
 
 - Se manca un package caricato in testa, lo script fallisce prima del messaggio di preflight.
 
-Test di regressione:
+Correzione verificata:
 
-- Preflight deve fallire con messaggio controllato quando manca una dipendenza dichiarata.
+- `--help` e l'invocazione senza argomenti funzionano senza caricare dipendenze analitiche.
+- Le dipendenze comuni e contestuali vengono verificate prima della creazione di `output_dir` e prima di `loadSQM()`; una mancanza produce un solo messaggio con modalita' e package coinvolti.
 
 ### BUG-P3-05: test con percorso personale assoluto
 
-Severita': bassa. Stato: verificato.
+Severita': bassa. Stato: corretto e verificato su `fix/p3-correctness` (2026-08-30).
 
 Riferimento:
 
-- `tests/test_windows_project_path.R:12`.
+- `tests/test_windows_project_path.R`: usa una root temporanea sintetica con spazi e non contiene percorsi personali.
 
 Impatto:
 
 - Il fixture incorpora un percorso e un nome utente personali. Il path oggi e' trattato solo come stringa e quindi il test puo' comunque passare altrove, ma l'intento di normalizzazione Windows puo' essere verificato senza dipendere ne' divulgare la struttura del computer dell'autore.
 
-Test di regressione:
+Correzione verificata:
 
-- Usare un path Windows sintetico e non personale; nessun test deve richiedere che un percorso assoluto specifico dell'autore esista.
+- Nessun test contiene `C:\Users\unico`; il fixture Windows non richiede che un percorso assoluto specifico dell'autore esista.
 
 ### BUG-P3-06: la suite corrente non esercita i percorsi che hanno prodotto risultati falsi
 
-Severita': media. Stato: verificato.
+Severita': media. Stato: corretto e verificato progressivamente sui branch `fix/p0-correctness` - `fix/p3-correctness` (2026-08-30).
 
 Riferimenti:
 
-- `tests/test_pathway_selection.R`.
-- `tests/test_pathview_sample_modes.R`.
-- `tests/test_enzyme_mode.R`.
-- `tests/test_windows_project_path.R`.
+- `tests/run_fast_tests.R`: 19 file sintetici, con le integrazioni reali P0-P3 escluse esplicitamente.
+- `tests/check_p0_coverage.R` - `tests/check_p3_coverage.R`: gate mirati `covr` sulle funzioni corrette.
+- `tests/test_p0_integration_Au_sip.R` - `tests/test_p3_integration_Au_sip.R`: invarianti reali caricate da `in/Au_sip`.
+- `tests/verify_p2_candidate_outputs.R` e `tests/verify_p3_candidate_outputs.R`: controllo parametrico degli artefatti candidati.
 
-Copertura mancante osservata:
+Copertura originariamente mancante e ora mantenuta:
 
 - conservazione del TPM nei FLOW;
 - denominatore delle percentuali tassonomiche per pathway;
@@ -598,12 +608,64 @@ Impatto:
 
 - I quattro test passano pur in presenza dei bug P0 e P1; il verde corrente non costituisce una validazione scientifica degli output.
 
-Direzione di correzione:
+Correzione verificata:
 
-- Scrivere prima una riproduzione minima fallente per ogni fix e mantenerla nella suite.
-- Separare test sintetici veloci dalla run di integrazione reale, ma rendere entrambe ripetibili e documentate.
+- Ogni slice P0-P3 conserva la riproduzione sintetica introdotta prima del fix.
+- Test veloci, coperture mirate, integrazioni reali e verificatori candidate sono separati, ripetibili e documentati nelle evidenze di chiusura.
 
-## Ordine di implementazione per la prossima sessione
+## Evidenza di chiusura P3 - 2026-08-30
+
+Branch: `fix/p3-correctness`, creato da `01a31fd`.
+
+Checkpoint TDD e implementazione:
+
+- `ab2b49f`: preparazione harness P3;
+- `54e1c9a` / `f2fa1e0`: RED/GREEN per integrita' dei target manifest;
+- `a9884c1` / `18cf930`: RED/GREEN per nomi PNG portabili su Windows;
+- `b086d7d` / `654e1ea`: RED/GREEN per export PIE completo e round-trip tabella-grafico;
+- `827f770` / `130e5d5`: RED/GREEN per preflight package completo e mode-aware;
+- `47b7af5`: fixture Windows sintetico senza percorso personale;
+- `47880e9`: riconciliazione sicura delle righe manifest storiche;
+- `a1b3993`: integrazione reale, copertura P3 e verificatore parametrico dei candidati;
+- `6f2e2cc`: fix emerso in review per manifest legacy malformati senza colonna `output_file`.
+
+Comandi finali eseguiti tramite `rtk`, tutti con exit `0`:
+
+```powershell
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\run_fast_tests.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\check_p0_coverage.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\check_p1_coverage.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\check_p2_coverage.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\check_p3_coverage.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\test_p0_integration_Au_sip.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\test_p1_integration_Au_sip.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\test_p2_integration_Au_sip.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\test_p3_integration_Au_sip.R
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\verify_p3_candidate_outputs.R out\p3_candidate_01_windows out\p3_candidate_01_pie out\p3_candidate_01_all
+rtk proxy C:\Progra~1\R\R-4.5.0\bin\Rscript.exe tests\test_p3_manifest_integrity.R
+```
+
+Risultati osservati:
+
+- test veloci: 19 file completati;
+- `covr` 3.6.5: tutte le funzioni mirate P0-P3 superano l'80%; baseline globali informative rispettivamente 8.19%, 12.21%, 15.62% e 15.09%;
+- integrazioni P0, P1 e P2 ancora verdi senza regressioni;
+- integrazione P3 reale su `00633` / `S13_1_8`: `K10679`, KO TPM `18.284`, pathway TPM `25.632`, confrontati con denominatori calcolati indipendentemente;
+- warning di compatibilita' SqueezeMeta 1.7.3.alpha3 / SQMtools 1.7.2 ancora visibile;
+- candidato Windows `out/p3_candidate_01_windows`: 8 target validi, inclusi 6 PNG; nessun file troncato senza estensione;
+- candidato PIE `out/p3_candidate_01_pie`: 22 target validi, inclusi 11 TSV PIE completi;
+- candidato finale `out/p3_candidate_01_all`: 56 target validi e cinque sezioni (`flow`, `funz`, `taxon`, `pathview`, `pie`) in `manifest_all.tsv`;
+- Pathview live per `00361` completato senza mock e tutti i target Pathview registrati esistono e sono non vuoti;
+- la run ridotta ma reale `--mode=all` e' completata con successo; non era mai stata eseguita nelle chiusure P0-P2.
+- review finale owner/spec: nessun rilievo CRITICAL o HIGH residuo. Un rilievo medio emerso durante la chiusura riguardava i manifest legacy privi di `output_file`; e' stato chiuso con `6f2e2cc` e test dedicato in `tests/test_p3_manifest_integrity.R`.
+
+Il primo tentativo richiesto in `out/p3_candidate_20260830_01_windows` ha esercitato correttamente il fail-fast: la root assoluta era gia' lunga 222 caratteri e non poteva contenere prefisso minimo, token, dimensione ed estensione entro il limite 240. La directory parziale e' rimasta come evidenza locale e non e' stata classificata come candidata verde. Sono quindi state usate le tre root piu' corte sopra, senza cambiare la soglia o le directory interne.
+
+Baseline storica AC-008, conservata read-only: 18 target mancanti nei manifest di sezione e un riferimento a manifest mancante in `manifest_all.tsv`. Gli output storici non sono stati modificati, rigenerati o approvati. Restano fuori scope il refactor del monolite `sqm_plots.R` e la serializzazione dell'audit nei contesti FLOW/PIE completamente privi di KO e quindi privi di artefatti.
+
+Review finale read-only del 2026-08-31: l'asse di specifica ha confermato la risoluzione dei rilievi documentali dopo la correzione dell'evidenza PIE; l'asse standard non ha rilevato violazioni. Non restano rilievi CRITICAL/HIGH. Il monolite `sqm_plots.R` e' stato riconfermato come debito preesistente fuori scope, non come blocco P3.
+
+## Traccia di implementazione completata
 
 ### Fase 0 - Bloccare i falsi risultati critici
 
@@ -634,9 +696,9 @@ Direzione di correzione:
 4. Spostare il preflight prima dei `library()` o usare accessi namespaced con una lista completa e mode-aware delle dipendenze.
 5. Rendere portabile il test Windows e aggiungere i test mancanti elencati in BUG-P3-06.
 
-Regola di avanzamento: non iniziare una fase dichiarando chiusa la precedente finche' i suoi test sintetici non sono verdi e l'invariante reale associata non e' stata controllata. Non modificare i test per adattarli a un risultato noto errato.
+La sequenza e' stata eseguita per slice RED-GREEN, senza modificare i test per adattarli a risultati noti errati. Ogni fase e' stata chiusa soltanto dopo i test sintetici e l'invariante reale associata.
 
-## Comandi di verifica consigliati
+## Comandi di verifica originari
 
 Usare sempre `rtk` nella shell della sessione.
 
@@ -664,7 +726,7 @@ Controlli manuali o scriptabili dopo la run:
 - Verificare che gli output sotto `taxon_filter/...` derivino esattamente dall'insieme ORF del taxon richiesto, senza inclusioni **e senza esclusioni**.
 - Registrare versioni di R, SQMtools e progetto SqueezeMeta insieme alla run candidata.
 
-## Checklist prossima sessione
+## Checklist completata
 
 - [x] Aggiornare test di regressione per BUG-P0-01, BUG-P0-02 e BUG-P0-03 prima o insieme alle correzioni.
 - [x] Correggere le mappature KEGG e aggiornare i test che codificano ID errati.
@@ -673,19 +735,19 @@ Controlli manuali o scriptabili dopo la run:
 - [x] Limitare `top20` a vere pathway map.
 - [x] Calcolare `top20` nel contesto filtrato quando `--taxa` e' attivo.
 - [x] Rendere uno-a-uno il metadata join KO nei flow e verificare conservazione TPM.
-- [ ] Tenere `Unclassified` distinto da `Other`.
-- [ ] Definire e documentare policy multi-EC e multi-KO nei TSV/manifest.
-- [ ] Gestire sample pathway vuoti senza interrompere l'intera run.
-- [ ] Validare input CLI numerici prima di `as.integer()`.
-- [ ] Pulire i manifest da target inesistenti o fallire esplicitamente.
-- [ ] Ricontare e registrare i riferimenti manifest mancanti sulla baseline usata nella nuova sessione.
-- [ ] Rendere completo il TSV PIE rispetto alle annotazioni del grafico.
-- [ ] Rendere il preflight package effettivo.
-- [ ] Rimuovere path personali dai test.
-- [ ] Eseguire tutti i test esistenti e nuovi, quindi una run reale pulita su `in/Au_sip`.
-- [ ] Rigenerare gli output affetti in una directory nuova; non promuovere quelli storici.
+- [x] Tenere `Unclassified` distinto da `Other`.
+- [x] Definire e documentare policy multi-EC e multi-KO nei TSV/manifest.
+- [x] Gestire sample pathway vuoti senza interrompere l'intera run.
+- [x] Validare input CLI numerici prima di `as.integer()`.
+- [x] Pulire i manifest da target inesistenti o fallire esplicitamente.
+- [x] Ricontare e registrare i riferimenti manifest mancanti sulla baseline usata nella nuova sessione.
+- [x] Rendere completo il TSV PIE rispetto alle annotazioni del grafico.
+- [x] Rendere il preflight package effettivo.
+- [x] Rimuovere path personali dai test.
+- [x] Eseguire tutti i test esistenti e nuovi, quindi una run reale pulita su `in/Au_sip`.
+- [x] Generare i candidati corretti in directory nuove; non promuovere gli output storici.
 
-Done only when:
+Done verificato:
 
 - I mapping KEGG sono conformi agli ID ufficiali.
 - Le percentuali tassonomiche per pathway sommano a 100 per ogni sample con denominatore positivo; i sample vuoti sono gestiti esplicitamente.
