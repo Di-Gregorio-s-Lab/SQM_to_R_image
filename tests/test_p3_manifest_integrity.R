@@ -236,4 +236,32 @@ for (manifest_relative in combined_rows$manifest_file) {
 pruned_taxon <- readr::read_tsv(taxon_manifest_path, show_col_types = FALSE, na = "NA")
 expect_true(nrow(pruned_taxon) == 0L, "Combined reconciliation did not leave the stale-only manifest empty")
 
+# A malformed legacy manifest without output_file is stale as a whole. It must
+# be pruned without aborting the aggregate reconciliation.
+malformed_root <- tempfile("p3_manifest_malformed_")
+dir.create(file.path(malformed_root, "flowplot"), recursive = TRUE)
+on.exit(unlink(malformed_root, recursive = TRUE, force = TRUE), add = TRUE)
+malformed_manifest_path <- file.path(malformed_root, "flowplot", "manifest_flow.tsv")
+script_env$write_tsv_safe(
+  tibble::tibble(marker = "legacy-without-output-file"),
+  malformed_manifest_path
+)
+
+malformed_warnings <- character()
+malformed_result <- withCallingHandlers(
+  script_env$write_combined_manifest(malformed_root),
+  warning = function(warning_condition) {
+    malformed_warnings <<- c(malformed_warnings, conditionMessage(warning_condition))
+    invokeRestart("muffleWarning")
+  }
+)
+malformed_all <- readr::read_tsv(malformed_result, show_col_types = FALSE, na = "NA")
+malformed_section <- readr::read_tsv(malformed_manifest_path, show_col_types = FALSE, na = "NA")
+expect_true(nrow(malformed_all) == 0L, "Malformed stale manifest entered manifest_all.tsv")
+expect_true(nrow(malformed_section) == 0L, "Malformed legacy rows were not pruned")
+expect_true(
+  any(grepl("missing output_file", malformed_warnings, fixed = TRUE)),
+  "Malformed legacy manifest did not report the missing output_file column"
+)
+
 message("PASS: P3 manifest target integrity and aggregate reconciliation")

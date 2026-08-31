@@ -3564,7 +3564,11 @@ merge_section_manifest <- function(new_manifest_tbl, existing_manifest_tbl) {
       new_manifest_tbl[[column_name]] <- rep(existing_column[NA_integer_], length(new_column))
     }
   }
-  bind_rows(new_manifest_tbl, existing_manifest_tbl) |>
+  merged_manifest_tbl <- bind_rows(new_manifest_tbl, existing_manifest_tbl)
+  if (!"output_file" %in% colnames(merged_manifest_tbl)) {
+    return(merged_manifest_tbl[0, , drop = FALSE])
+  }
+  merged_manifest_tbl |>
     distinct(.data$output_file, .keep_all = TRUE)
 }
 
