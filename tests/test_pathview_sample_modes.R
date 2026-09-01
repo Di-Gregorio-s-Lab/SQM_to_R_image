@@ -39,6 +39,7 @@ fake_export_pathway <- function(
     count,
     samples,
     split_samples,
+    log_scale,
     output_dir,
     output_suffix) {
   calls[[length(calls) + 1L]] <<- list(
@@ -47,6 +48,7 @@ fake_export_pathway <- function(
     count = count,
     samples = samples,
     split_samples = split_samples,
+    log_scale = log_scale,
     output_dir = output_dir,
     output_suffix = output_suffix
   )
@@ -80,6 +82,7 @@ result <- script_env$run_pathview_mode(
 
 stopifnot(length(calls) == 3L)
 stopifnot(all(!vapply(calls, `[[`, logical(1), "split_samples")))
+stopifnot(all(!vapply(calls, `[[`, logical(1), "log_scale")))
 stopifnot(identical(vapply(calls, `[[`, character(1), "count"), rep("tpm", 3L)))
 stopifnot(length(unique(vapply(calls, `[[`, character(1), "output_dir"))) == 3L)
 stopifnot(identical(
@@ -90,5 +93,18 @@ stopifnot(all(file.exists(file.path(test_root, result$pathview$output_file))))
 separate_plots <- result$pathview$output_type == "pathview_file" &
   result$pathview$output_scope == "pathway_defined_separato"
 stopifnot(setequal(result$pathview$samples[separate_plots], c("CS8T0", "CS8T2")))
+
+input_rows <- result$pathview$output_type == "pathview_input_all_ko_complete_matrix_tsv"
+stopifnot(sum(input_rows) == 3L)
+stopifnot(all(grepl("pathview_input_all_ko_complete_matrix", result$pathview$output_file[input_rows], fixed = TRUE)))
+config_path <- file.path(
+  test_root,
+  result$pathview$output_file[result$pathview$output_type == "pathview_render_config_tsv"][[1L]]
+)
+config <- readr::read_tsv(config_path, show_col_types = FALSE, na = "NA")
+stopifnot(identical(config$log_scale, FALSE))
+stopifnot(is.na(config$pseudocount))
+stopifnot(identical(config$color_source, "pathview_native"))
+stopifnot(identical(config$input_scope, "complete_all_ko_matrix"))
 
 message("PASS: Pathview creates combined and split-sample output branches")

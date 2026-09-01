@@ -158,8 +158,8 @@ run_case("subset uses the ORF boundary without rescaling", {
   )
   expect_identical(
     call$ignore_unclassified_functions,
-    TRUE,
-    "subsetORFs must preserve the existing unclassified-function policy"
+    FALSE,
+    "subsetORFs must retain ORFs with unclassified functions"
   )
   expect_identical(call$rescale_tpm, FALSE, "subsetORFs rescaled TPM")
   expect_identical(
@@ -176,6 +176,25 @@ run_case("subset uses the ORF boundary without rescaling", {
     rownames(subset$orfs$table),
     expected_orf_ids,
     "Returned subset does not contain the exact requested ORF IDs"
+  )
+})
+
+run_case("single-ORF taxa remain rectangular and retain unclassified functions", {
+  subset_calls <- list()
+  single_orf_id <- expected_orf_ids[[1L]]
+  subset <- script_env$subset_sqm_by_taxon(
+    fake_sqm,
+    single_orf_id,
+    subset_orfs_fn = fake_subset_orfs
+  )
+
+  expect_identical(nrow(subset$orfs$table), 1L, "Single-ORF table lost its row")
+  expect_identical(nrow(subset$orfs$tax), 1L, "Single-ORF taxonomy lost its row")
+  expect_identical(nrow(subset$orfs$tpm), 1L, "Single-ORF TPM lost its row")
+  expect_identical(
+    subset_calls[[1L]]$ignore_unclassified_functions,
+    FALSE,
+    "Single-ORF filtering discarded unclassified functions"
   )
 })
 
