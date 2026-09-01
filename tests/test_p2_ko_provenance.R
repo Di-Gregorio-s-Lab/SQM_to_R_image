@@ -323,6 +323,112 @@ run_case("KO mode runners propagate expansion provenance to every manifest row",
   expect_manifest_audit(pie_result$pie, "PIE")
 })
 
+run_case("Pathway analysis is built once and reused by every KO mode", {
+  temp_root <- tempfile("shared_pathway_analysis_")
+  dir.create(temp_root, recursive = TRUE)
+  on.exit(unlink(temp_root, recursive = TRUE, force = TRUE), add = TRUE)
+
+  build_calls <- 0L
+  original_builder <- script_env$build_orf_long_result
+  script_env$build_orf_long_result <- function(pathway_sqm, selected_samples) {
+    build_calls <<- build_calls + 1L
+    original_builder(pathway_sqm, selected_samples)
+  }
+  on.exit({
+    script_env$build_orf_long_result <- original_builder
+  }, add = TRUE)
+
+  pathway_info <- list(
+    pathway_name = "Synthetic pathway",
+    pathway_id = "00000",
+    pathway_selection = "defined",
+    pathway_sqm = fake_pathway_sqm
+  )
+  pathway_analysis <- script_env$build_pathway_analysis(
+    pathway_info,
+    "S_positive"
+  )
+  expect_identical(
+    build_calls,
+    1L,
+    "Building one pathway analysis did not perform exactly one ORF expansion"
+  )
+
+  common_args <- list(
+    output_dir = temp_root,
+    manifest_base_dir = temp_root,
+    script_name = "sqm_plots.R",
+    project_dir = "synthetic_project",
+    tax_mode = "prokfilter",
+    pathway_name = pathway_info$pathway_name,
+    pathway_sqm = pathway_info$pathway_sqm,
+    selected_samples = "S_positive",
+    dimensions = list(`2x2` = c(width = 2, height = 2)),
+    plot_dpi = 75,
+    top_n_taxa = 3L,
+    top_n_ko = 3L,
+    pathway_id = pathway_info$pathway_id,
+    pathway_selection = pathway_info$pathway_selection,
+    pathway_analysis = pathway_analysis
+  )
+
+  funz_result <- do.call(
+    script_env$run_funz_mode,
+    c(common_args, list(output_manifests = list(funz = tibble::tibble())))
+  )
+  flow_result <- do.call(
+    script_env$run_flow_mode,
+    c(
+      common_args,
+      list(
+        output_manifests = list(flow = tibble::tibble()),
+        taxonomy_ranks = "phylum",
+        flowplot_formats = "png"
+      )
+    )
+  )
+  pie_result <- do.call(
+    script_env$run_pie_mode,
+    c(
+      common_args,
+      list(
+        output_manifests = list(pie = tibble::tibble()),
+        taxonomy_ranks = "phylum"
+      )
+    )
+  )
+
+  expect_identical(
+    build_calls,
+    1L,
+    "FUNZ, FLOW, or PIE rebuilt the shared ORF-long result"
+  )
+  expect_manifest_audit(funz_result$funz, "shared FUNZ")
+  expect_manifest_audit(flow_result$flow, "shared FLOW")
+  expect_manifest_audit(pie_result$pie, "shared PIE")
+  rendered_pngs <- list.files(
+    temp_root,
+    pattern = "\\.png$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+  expect_true(
+    length(rendered_pngs) >= 3L && all(file.info(rendered_pngs)$size > 0L),
+    "The shared 75-DPI analysis did not render non-empty PNG artifacts"
+  )
+  rendered_rows <- dplyr::bind_rows(
+    funz_result$funz,
+    flow_result$flow,
+    pie_result$pie
+  ) |>
+    dplyr::filter(.data$format == "png")
+  expect_true(
+    nrow(rendered_rows) == length(rendered_pngs) &&
+      all(rendered_rows$dpi == 75),
+    "The shared analysis manifests did not preserve 75 DPI for every PNG"
+  )
+})
+
 run_case("multi-KO expansion replicates full TPM for each association", {
   build_orf_long_result <- require_script_function(
     script_env,

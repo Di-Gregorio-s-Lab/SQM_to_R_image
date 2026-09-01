@@ -141,6 +141,29 @@ expect_error_contains(
   "Invalid dimension",
   "Infinite plot dimension passed validation"
 )
+expect_error_contains(
+  script_env$parse_dimensions(list(dimensions = "")),
+  "dimensions cannot be empty",
+  "An empty dimensions list passed CLI validation"
+)
+expect_error_contains(
+  script_env$normalize_taxonomy_counts(""),
+  "taxonomy_counts cannot be empty",
+  "An empty taxonomy_counts list passed CLI validation"
+)
+expect_error_contains(
+  script_env$normalize_flowplot_formats(""),
+  "flowplot_formats cannot be empty",
+  "An empty flowplot_formats list passed CLI validation"
+)
+stopifnot(identical(
+  script_env$normalize_taxonomy_counts(NULL),
+  c("abund", "percent")
+))
+stopifnot(identical(
+  script_env$normalize_flowplot_formats(NULL),
+  c("png", "html")
+))
 
 safe_a <- script_env$safe_output_component("A/B")
 safe_b <- script_env$safe_output_component("A B")
