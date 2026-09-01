@@ -273,6 +273,49 @@ split_csv_arg <- function(x) {
   values[nzchar(values)]
 }
 
+normalize_nonempty_cli_list <- function(value, default, option_name) {
+  values <- if (is.null(value)) {
+    default
+  } else if (length(value) == 1L) {
+    split_csv_arg(value)
+  } else {
+    trimws(as.character(value))
+  }
+  values <- unique(values[nzchar(values)])
+
+  if (length(values) == 0L) {
+    stop(option_name, " cannot be empty.", call. = FALSE)
+  }
+
+  values
+}
+
+normalize_taxonomy_counts <- function(value = NULL) {
+  allowed_counts <- c("abund", "percent")
+  counts <- normalize_nonempty_cli_list(
+    value,
+    default = allowed_counts,
+    option_name = "taxonomy_counts"
+  )
+  if (!all(counts %in% allowed_counts)) {
+    stop("taxonomy_counts must contain only abund and/or percent.", call. = FALSE)
+  }
+  counts
+}
+
+normalize_flowplot_formats <- function(value = NULL) {
+  allowed_formats <- c("png", "html")
+  formats <- normalize_nonempty_cli_list(
+    value,
+    default = allowed_formats,
+    option_name = "flowplot_formats"
+  )
+  if (!all(formats %in% allowed_formats)) {
+    stop("flowplot_formats must contain only png and/or html.", call. = FALSE)
+  }
+  formats
+}
+
 normalize_pathview_sample_modes <- function(value = NULL) {
   allowed_modes <- c("insieme", "separato")
   modes <- if (is.null(value)) {
@@ -418,6 +461,9 @@ parse_dimensions <- function(named_args) {
   }
 
   labels <- split_csv_arg(named_args$dimensions)
+  if (length(labels) == 0L) {
+    stop("dimensions cannot be empty.", call. = FALSE)
+  }
   parsed <- map(labels, function(label) {
     parts <- str_split(label, "x", simplify = TRUE)
     if (ncol(parts) != 2L) {
@@ -1789,6 +1835,97 @@ get_ko_name_lookup <- function(pathway_sqm) {
   stats::setNames(as.character(kegg_names), names(kegg_names))
 }
 
+validate_pathway_analysis <- function(pathway_analysis) {
+  required_fields <- c(
+    "pathway_name",
+    "pathway_id",
+    "pathway_selection",
+    "pathway_sqm",
+    "selected_samples",
+    "orf_long_result",
+    "ko_lookup"
+  )
+  if (!inherits(pathway_analysis, "sqm_pathway_analysis")) {
+    stop("pathway_analysis must be created by build_pathway_analysis().", call. = FALSE)
+  }
+  missing_fields <- setdiff(required_fields, names(pathway_analysis))
+  if (length(missing_fields) > 0L) {
+    stop(
+      "pathway_analysis is missing fields: ",
+      paste(missing_fields, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (
+    !is.list(pathway_analysis$orf_long_result) ||
+      !all(c("data", "audit") %in% names(pathway_analysis$orf_long_result))
+  ) {
+    stop("pathway_analysis has an invalid ORF-long result.", call. = FALSE)
+  }
+  invisible(pathway_analysis)
+}
+
+build_pathway_analysis <- function(pathway_info, selected_samples) {
+  required_fields <- c(
+    "pathway_name", "pathway_id", "pathway_selection", "pathway_sqm"
+  )
+  if (!is.list(pathway_info)) {
+    stop("pathway_info must be a list.", call. = FALSE)
+  }
+  missing_fields <- setdiff(required_fields, names(pathway_info))
+  if (length(missing_fields) > 0L) {
+    stop(
+      "pathway_info is missing fields: ",
+      paste(missing_fields, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  selected_samples <- as.character(selected_samples)
+  if (length(selected_samples) == 0L || anyNA(selected_samples)) {
+    stop("pathway_analysis requires at least one selected sample.", call. = FALSE)
+  }
+
+  pathway_analysis <- structure(
+    list(
+      pathway_name = as.character(pathway_info$pathway_name),
+      pathway_id = as.character(pathway_info$pathway_id),
+      pathway_selection = as.character(pathway_info$pathway_selection),
+      pathway_sqm = pathway_info$pathway_sqm,
+      selected_samples = selected_samples,
+      orf_long_result = build_orf_long_result(
+        pathway_info$pathway_sqm,
+        selected_samples
+      ),
+      ko_lookup = get_ko_name_lookup(pathway_info$pathway_sqm)
+    ),
+    class = c("sqm_pathway_analysis", "list")
+  )
+  validate_pathway_analysis(pathway_analysis)
+  pathway_analysis
+}
+
+resolve_pathway_analysis <- function(
+    pathway_analysis,
+    pathway_name,
+    pathway_sqm,
+    selected_samples,
+    pathway_id,
+    pathway_selection) {
+  if (is.null(pathway_analysis)) {
+    pathway_analysis <- build_pathway_analysis(
+      list(
+        pathway_name = pathway_name,
+        pathway_id = pathway_id,
+        pathway_selection = pathway_selection,
+        pathway_sqm = pathway_sqm
+      ),
+      selected_samples
+    )
+  }
+  validate_pathway_analysis(pathway_analysis)
+  pathway_analysis
+}
+
 extract_ko_ec_lookup <- function(orf_long) {
   if (!"ko_id" %in% colnames(orf_long)) {
     stop("KO EC lookup requires column: ko_id", call. = FALSE)
@@ -3107,7 +3244,21 @@ run_funz_mode <- function(
     pathway_id = NA_character_,
     pathway_selection = "defined",
     filtered_taxon = NA_character_,
-    filtered_taxon_rank = NA_character_) {
+    filtered_taxon_rank = NA_character_,
+    pathway_analysis = NULL) {
+  pathway_analysis <- resolve_pathway_analysis(
+    pathway_analysis = pathway_analysis,
+    pathway_name = pathway_name,
+    pathway_sqm = pathway_sqm,
+    selected_samples = selected_samples,
+    pathway_id = pathway_id,
+    pathway_selection = pathway_selection
+  )
+  pathway_name <- pathway_analysis$pathway_name
+  pathway_sqm <- pathway_analysis$pathway_sqm
+  selected_samples <- pathway_analysis$selected_samples
+  pathway_id <- pathway_analysis$pathway_id
+  pathway_selection <- pathway_analysis$pathway_selection
   progress_message(
     "FUNZ | pathway=", pathway_name,
     " | samples=", paste(selected_samples, collapse = ",")
@@ -3121,9 +3272,9 @@ run_funz_mode <- function(
   )
   dir.create(pathway_dir, recursive = TRUE, showWarnings = FALSE)
 
-  orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  orf_long_result <- pathway_analysis$orf_long_result
   orf_long <- orf_long_result$data
-  ko_lookup <- get_ko_name_lookup(pathway_sqm)
+  ko_lookup <- pathway_analysis$ko_lookup
   plot_tbl <- build_ko_plot_table(
     orf_long = orf_long,
     selected_samples = selected_samples,
@@ -3425,20 +3576,34 @@ run_flow_mode <- function(
     pathway_id = NA_character_,
     pathway_selection = "defined",
     filtered_taxon = NA_character_,
-    filtered_taxon_rank = NA_character_) {
+    filtered_taxon_rank = NA_character_,
+    pathway_analysis = NULL) {
+  pathway_analysis <- resolve_pathway_analysis(
+    pathway_analysis = pathway_analysis,
+    pathway_name = pathway_name,
+    pathway_sqm = pathway_sqm,
+    selected_samples = selected_samples,
+    pathway_id = pathway_id,
+    pathway_selection = pathway_selection
+  )
+  pathway_name <- pathway_analysis$pathway_name
+  pathway_sqm <- pathway_analysis$pathway_sqm
+  selected_samples <- pathway_analysis$selected_samples
+  pathway_id <- pathway_analysis$pathway_id
+  pathway_selection <- pathway_analysis$pathway_selection
   progress_message(
     "FLOW | pathway=", pathway_name,
     " | ranks=", paste(taxonomy_ranks, collapse = ","),
     " | samples=", paste(selected_samples, collapse = ",")
   )
-  orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  orf_long_result <- pathway_analysis$orf_long_result
   orf_long <- orf_long_result$data
   if (nrow(orf_long) == 0L) {
     warning("No positive ORF data for pathway ", pathway_name, ".", call. = FALSE)
     return(output_manifests)
   }
 
-  ko_lookup <- get_ko_name_lookup(pathway_sqm)
+  ko_lookup <- pathway_analysis$ko_lookup
 
   for (rank in taxonomy_ranks) {
     progress_message("FLOW | pathway=", pathway_name, " | rank=", rank)
@@ -4033,7 +4198,21 @@ run_pie_mode <- function(
     pathway_id = NA_character_,
     pathway_selection = "defined",
     filtered_taxon = NA_character_,
-    filtered_taxon_rank = NA_character_) {
+    filtered_taxon_rank = NA_character_,
+    pathway_analysis = NULL) {
+  pathway_analysis <- resolve_pathway_analysis(
+    pathway_analysis = pathway_analysis,
+    pathway_name = pathway_name,
+    pathway_sqm = pathway_sqm,
+    selected_samples = selected_samples,
+    pathway_id = pathway_id,
+    pathway_selection = pathway_selection
+  )
+  pathway_name <- pathway_analysis$pathway_name
+  pathway_sqm <- pathway_analysis$pathway_sqm
+  selected_samples <- pathway_analysis$selected_samples
+  pathway_id <- pathway_analysis$pathway_id
+  pathway_selection <- pathway_analysis$pathway_selection
   progress_message(
     "PIE | pathway=", pathway_name,
     " | ranks=", paste(taxonomy_ranks, collapse = ","),
@@ -4047,7 +4226,7 @@ run_pie_mode <- function(
   )
   dir.create(pie_root, recursive = TRUE, showWarnings = FALSE)
 
-  orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  orf_long_result <- pathway_analysis$orf_long_result
   orf_long <- orf_long_result$data
   if (nrow(orf_long) == 0L) {
     warning("No positive ORF data for pathway ", pathway_name, ".", call. = FALSE)
@@ -4646,23 +4825,8 @@ main_impl <- function() {
     stop("taxonomy_ranks cannot be empty.", call. = FALSE)
   }
 
-  taxonomy_counts <- if (is.null(named_args$taxonomy_counts)) {
-    c("abund", "percent")
-  } else {
-    split_csv_arg(named_args$taxonomy_counts)
-  }
-  if (!all(taxonomy_counts %in% c("abund", "percent"))) {
-    stop("taxonomy_counts must contain only abund and/or percent.", call. = FALSE)
-  }
-
-  flowplot_formats <- if (is.null(named_args$flowplot_formats)) {
-    c("png", "html")
-  } else {
-    split_csv_arg(named_args$flowplot_formats)
-  }
-  if (!all(flowplot_formats %in% c("png", "html"))) {
-    stop("flowplot_formats must contain only png and/or html.", call. = FALSE)
-  }
+  taxonomy_counts <- normalize_taxonomy_counts(named_args$taxonomy_counts)
+  flowplot_formats <- normalize_flowplot_formats(named_args$flowplot_formats)
   check_flow_html_preflight(mode, flowplot_formats)
   pathview_sample_modes <- normalize_pathview_sample_modes(named_args$pathview_sample_modes)
   pathway_selection_modes <- normalize_pathway_selection_modes(named_args$pathway_selection_modes)
@@ -4820,83 +4984,10 @@ main_impl <- function() {
 
     if (mode %in% c("all", "funz")) {
       progress_message("Starting FUNZ section")
-    for (pathway_key in names(pathway_sqms)) {
-      pathway_info <- pathway_sqms[[pathway_key]]
-      pathway_name <- pathway_info$pathway_name
-      manifests <- run_funz_mode(
-          output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
-          output_manifests = manifests,
-          script_name = script_name,
-          project_dir = project_dir,
-          tax_mode = tax_mode,
-          pathway_name = pathway_name,
-        pathway_sqm = pathway_info$pathway_sqm,
-          selected_samples = selected_samples,
-          dimensions = dimensions,
-          plot_dpi = plot_dpi,
-          top_n_taxa = top_n_taxa,
-          top_n_ko = top_n_ko,
-        pathway_id = pathway_info$pathway_id,
-        pathway_selection = pathway_info$pathway_selection,
-          filtered_taxon = context$filtered_taxon,
-          filtered_taxon_rank = context$filtered_taxon_rank
-        )
-      }
     }
-
-    if (mode %in% c("all", "funz", "enzimi")) {
-      progress_message("Starting ENZIMI section")
-      manifests <- run_enzyme_mode(
-        sqm_object = context_sqm,
-        output_dir = context_output_dir,
-        manifest_base_dir = output_dir,
-        output_manifests = manifests,
-        script_name = script_name,
-        project_dir = project_dir,
-        tax_mode = tax_mode,
-        selected_samples = selected_samples,
-        dimensions = dimensions,
-        plot_dpi = plot_dpi,
-        top_n_taxa = top_n_taxa,
-        top_n_ko = top_n_ko,
-        enzyme_ecs = enzyme_ecs,
-        enzyme_plot_types = enzyme_plot_types,
-        sample_order_basis = sample_order_basis,
-        filtered_taxon = context$filtered_taxon,
-        filtered_taxon_rank = context$filtered_taxon_rank
-      )
-    }
-
     if (mode %in% c("all", "flow")) {
       progress_message("Starting FLOW section")
-    for (pathway_key in names(pathway_sqms)) {
-      pathway_info <- pathway_sqms[[pathway_key]]
-      pathway_name <- pathway_info$pathway_name
-      manifests <- run_flow_mode(
-          output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
-          output_manifests = manifests,
-          script_name = script_name,
-          project_dir = project_dir,
-          tax_mode = tax_mode,
-          pathway_name = pathway_name,
-        pathway_sqm = pathway_info$pathway_sqm,
-          selected_samples = selected_samples,
-          dimensions = dimensions,
-          plot_dpi = plot_dpi,
-          top_n_taxa = top_n_taxa,
-          top_n_ko = top_n_ko,
-          taxonomy_ranks = taxonomy_ranks,
-          flowplot_formats = flowplot_formats,
-        pathway_id = pathway_info$pathway_id,
-        pathway_selection = pathway_info$pathway_selection,
-          filtered_taxon = context$filtered_taxon,
-          filtered_taxon_rank = context$filtered_taxon_rank
-        )
-      }
     }
-
     if (mode %in% c("all", "taxon")) {
       progress_message("Starting TAXON section")
       manifests <- run_taxonomy_scope(
@@ -4922,13 +5013,115 @@ main_impl <- function() {
         filtered_taxon = context$filtered_taxon,
         filtered_taxon_rank = context$filtered_taxon_rank
       )
+    }
+    if (mode %in% c("all", "pathview")) {
+      progress_message("Starting PATHVIEW section")
+    }
+    if (mode %in% c("all", "pie")) {
+      progress_message("Starting PIE section")
+    }
 
-      if (length(pathway_sqms) > 0L) {
-      for (pathway_key in names(pathway_sqms)) {
-        pathway_info <- pathway_sqms[[pathway_key]]
-        pathway_name <- pathway_info$pathway_name
+    for (pathway_key in names(pathway_sqms)) {
+      pathway_info <- pathway_sqms[[pathway_key]]
+      pathway_name <- pathway_info$pathway_name
+      pie_enabled <- mode %in% c("all", "pie") &&
+        pathway_info$pathway_selection %in% pie_selection_modes
+      needs_pathway_analysis <- mode %in% c("all", "funz", "flow") ||
+        pie_enabled
+      pathway_analysis <- if (needs_pathway_analysis) {
+        build_pathway_analysis(pathway_info, selected_samples)
+      } else {
+        NULL
+      }
+
+      if (mode %in% c("all", "funz")) {
+        manifests <- run_funz_mode(
+          output_dir = context_output_dir,
+          manifest_base_dir = output_dir,
+          output_manifests = manifests,
+          script_name = script_name,
+          project_dir = project_dir,
+          tax_mode = tax_mode,
+          pathway_name = pathway_name,
+          pathway_sqm = pathway_info$pathway_sqm,
+          selected_samples = selected_samples,
+          dimensions = dimensions,
+          plot_dpi = plot_dpi,
+          top_n_taxa = top_n_taxa,
+          top_n_ko = top_n_ko,
+          pathway_id = pathway_info$pathway_id,
+          pathway_selection = pathway_info$pathway_selection,
+          filtered_taxon = context$filtered_taxon,
+          filtered_taxon_rank = context$filtered_taxon_rank,
+          pathway_analysis = pathway_analysis
+        )
+      }
+
+      if (mode %in% c("all", "flow")) {
+        manifests <- run_flow_mode(
+          output_dir = context_output_dir,
+          manifest_base_dir = output_dir,
+          output_manifests = manifests,
+          script_name = script_name,
+          project_dir = project_dir,
+          tax_mode = tax_mode,
+          pathway_name = pathway_name,
+          pathway_sqm = pathway_info$pathway_sqm,
+          selected_samples = selected_samples,
+          dimensions = dimensions,
+          plot_dpi = plot_dpi,
+          top_n_taxa = top_n_taxa,
+          top_n_ko = top_n_ko,
+          taxonomy_ranks = taxonomy_ranks,
+          flowplot_formats = flowplot_formats,
+          pathway_id = pathway_info$pathway_id,
+          pathway_selection = pathway_info$pathway_selection,
+          filtered_taxon = context$filtered_taxon,
+          filtered_taxon_rank = context$filtered_taxon_rank,
+          pathway_analysis = pathway_analysis
+        )
+      }
+
+      if (mode %in% c("all", "taxon")) {
         manifests <- run_taxonomy_scope(
           sqm_object = pathway_info$pathway_sqm,
+          output_dir = context_output_dir,
+          manifest_base_dir = output_dir,
+          output_manifests = manifests,
+          script_name = script_name,
+          project_dir = project_dir,
+          tax_mode = tax_mode,
+          pathway_name = pathway_name,
+          selected_samples = selected_samples,
+          dimensions = dimensions,
+          plot_dpi = plot_dpi,
+          top_n_taxa = top_n_taxa,
+          top_n_ko = top_n_ko,
+          taxonomy_ranks = taxonomy_ranks,
+          taxonomy_counts = taxonomy_counts,
+          scope_name = "taxonomy_by_pathway",
+          ignore_unmapped = FALSE,
+          ignore_unclassified = FALSE,
+          pathway_id = pathway_info$pathway_id,
+          pathway_selection = pathway_info$pathway_selection,
+          filtered_taxon = context$filtered_taxon,
+          filtered_taxon_rank = context$filtered_taxon_rank
+        )
+      }
+
+      if (mode %in% c("all", "pathview")) {
+        if (!pathview_is_exportable(
+          pathway_info$pathway_selection,
+          pathway_info$pathway_id
+        )) {
+          warning(
+            "Skipping PATHVIEW: pathway has no resolvable KEGG ID: ",
+            pathway_name,
+            call. = FALSE
+          )
+        } else {
+          manifests <- run_pathview_mode(
+            sqm_object = context_sqm,
             output_dir = context_output_dir,
             manifest_base_dir = output_dir,
             output_manifests = manifests,
@@ -4936,40 +5129,20 @@ main_impl <- function() {
             project_dir = project_dir,
             tax_mode = tax_mode,
             pathway_name = pathway_name,
+            pathway_id = pathway_info$pathway_id,
+            pathway_selection = pathway_info$pathway_selection,
             selected_samples = selected_samples,
-            dimensions = dimensions,
-            plot_dpi = plot_dpi,
             top_n_taxa = top_n_taxa,
             top_n_ko = top_n_ko,
-            taxonomy_ranks = taxonomy_ranks,
-            taxonomy_counts = taxonomy_counts,
-            scope_name = "taxonomy_by_pathway",
-            ignore_unmapped = FALSE,
-            ignore_unclassified = FALSE,
-        pathway_id = pathway_info$pathway_id,
-        pathway_selection = pathway_info$pathway_selection,
+            pathview_sample_modes = pathview_sample_modes,
             filtered_taxon = context$filtered_taxon,
             filtered_taxon_rank = context$filtered_taxon_rank
           )
         }
       }
-    }
 
-    if (mode %in% c("all", "pathview")) {
-      progress_message("Starting PATHVIEW section")
-    for (pathway_key in names(pathway_sqms)) {
-      pathway_info <- pathway_sqms[[pathway_key]]
-      pathway_name <- pathway_info$pathway_name
-      if (!pathview_is_exportable(pathway_info$pathway_selection, pathway_info$pathway_id)) {
-        warning(
-          "Skipping PATHVIEW: pathway has no resolvable KEGG ID: ",
-          pathway_name,
-          call. = FALSE
-        )
-        next
-      }
-      manifests <- run_pathview_mode(
-          sqm_object = context_sqm,
+      if (pie_enabled) {
+        manifests <- run_pie_mode(
           output_dir = context_output_dir,
           manifest_base_dir = output_dir,
           output_manifests = manifests,
@@ -4977,47 +5150,43 @@ main_impl <- function() {
           project_dir = project_dir,
           tax_mode = tax_mode,
           pathway_name = pathway_name,
-          pathway_id = pathway_info$pathway_id,
-          pathway_selection = pathway_info$pathway_selection,
-          selected_samples = selected_samples,
-          top_n_taxa = top_n_taxa,
-          top_n_ko = top_n_ko,
-          pathview_sample_modes = pathview_sample_modes,
-          filtered_taxon = context$filtered_taxon,
-          filtered_taxon_rank = context$filtered_taxon_rank
-        )
-      }
-    }
-
-    if (mode %in% c("all", "pie")) {
-      progress_message("Starting PIE section")
-    for (pathway_key in names(pathway_sqms)) {
-      pathway_info <- pathway_sqms[[pathway_key]]
-      if (!pathway_info$pathway_selection %in% pie_selection_modes) {
-        next
-      }
-      pathway_name <- pathway_info$pathway_name
-      manifests <- run_pie_mode(
-          output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
-          output_manifests = manifests,
-          script_name = script_name,
-          project_dir = project_dir,
-          tax_mode = tax_mode,
-          pathway_name = pathway_name,
-        pathway_sqm = pathway_info$pathway_sqm,
+          pathway_sqm = pathway_info$pathway_sqm,
           selected_samples = selected_samples,
           taxonomy_ranks = taxonomy_ranks,
           dimensions = dimensions,
           plot_dpi = plot_dpi,
           top_n_taxa = top_n_taxa,
-        top_n_ko = top_n_ko,
-        pathway_id = pathway_info$pathway_id,
-        pathway_selection = pathway_info$pathway_selection,
-        filtered_taxon = context$filtered_taxon,
-          filtered_taxon_rank = context$filtered_taxon_rank
+          top_n_ko = top_n_ko,
+          pathway_id = pathway_info$pathway_id,
+          pathway_selection = pathway_info$pathway_selection,
+          filtered_taxon = context$filtered_taxon,
+          filtered_taxon_rank = context$filtered_taxon_rank,
+          pathway_analysis = pathway_analysis
         )
       }
+    }
+
+    if (mode %in% c("all", "funz", "enzimi")) {
+      progress_message("Starting ENZIMI section")
+      manifests <- run_enzyme_mode(
+        sqm_object = context_sqm,
+        output_dir = context_output_dir,
+        manifest_base_dir = output_dir,
+        output_manifests = manifests,
+        script_name = script_name,
+        project_dir = project_dir,
+        tax_mode = tax_mode,
+        selected_samples = selected_samples,
+        dimensions = dimensions,
+        plot_dpi = plot_dpi,
+        top_n_taxa = top_n_taxa,
+        top_n_ko = top_n_ko,
+        enzyme_ecs = enzyme_ecs,
+        enzyme_plot_types = enzyme_plot_types,
+        sample_order_basis = sample_order_basis,
+        filtered_taxon = context$filtered_taxon,
+        filtered_taxon_rank = context$filtered_taxon_rank
+      )
     }
   }
 
