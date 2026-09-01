@@ -124,5 +124,31 @@ flow_sample <- build_flow_table_for_sample(
   "S0"
 )
 build_flow_legend_spec(flow_sample)
+character_flow_sample <- flow_sample |>
+  dplyr::mutate(
+    taxon = as.character(.data$taxon),
+    KO = as.character(.data$KO)
+  )
+build_flow_legend_spec(character_flow_sample)
+try(
+  build_flow_legend_spec(flow_sample[, setdiff(colnames(flow_sample), "ec_codes")]),
+  silent = TRUE
+)
+try(build_flow_legend_spec(flow_sample[0, , drop = FALSE]), silent = TRUE)
+inconsistent_flow_sample <- dplyr::bind_rows(
+  flow_sample,
+  flow_sample[1, , drop = FALSE] |>
+    dplyr::mutate(taxon_percent = .data$taxon_percent + 1)
+)
+try(build_flow_legend_spec(inconsistent_flow_sample), silent = TRUE)
+invalid_total_flow_sample <- flow_sample |>
+  dplyr::mutate(
+    taxon_percent = dplyr::if_else(
+      as.character(.data$taxon) == as.character(.data$taxon[[1L]]),
+      .data$taxon_percent + 1,
+      .data$taxon_percent
+    )
+  )
+try(build_flow_legend_spec(invalid_total_flow_sample), silent = TRUE)
 make_flow_plot(flow_sample, "Synthetic pathway", "phylum", "S0")
 make_flow_sankey(flow_sample, "Synthetic pathway", "phylum", "S0")
