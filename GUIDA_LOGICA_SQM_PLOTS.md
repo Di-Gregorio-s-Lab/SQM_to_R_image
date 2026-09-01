@@ -85,8 +85,9 @@ necessari per capire la modalità richiesta. In questo modo:
 - la verifica avviene prima di creare `output_dir` e prima di `loadSQM()`.
 
 I package comuni sono SQMtools, readr, dplyr, tidyr, tibble, stringr, ggplot2,
-glue, purrr e scales. FLOW aggiunge ggalluvial; FLOW HTML aggiunge plotly e
-htmlwidgets; PIE aggiunge forcats e rlang; PATHVIEW aggiunge pathview.
+glue, purrr e scales. FLOW aggiunge ggalluvial; i PNG FLOW aggiungono
+ggnewscale; FLOW HTML aggiunge plotly e htmlwidgets; PIE aggiunge forcats e
+rlang; PATHVIEW aggiunge pathview.
 
 ### 2. Lettura e validazione degli argomenti
 
@@ -347,18 +348,28 @@ KO. Per ogni rango:
 1. seleziona i primi taxa classificati e mantiene `Unclassified` separato;
 2. seleziona i primi KO e collassa gli altri in `Other`;
 3. somma il TPM per `sample × taxon × KO`;
-4. collega a ogni KO una sola riga di metadati descrittivi;
+4. collega a ogni KO una sola riga di metadati descrittivi e l'elenco EC;
 5. verifica che il join non cambi chiavi, righe o TPM;
 6. crea una tabella e un grafico distinti per campione.
 
 Se un KO ha più descrizioni, le descrizioni distinte vengono ordinate e unite
-con `; `. `Other` viene mostrato come `Other KOs`.
+con `; `. Anche gli EC multipli vengono ordinati e uniti con `;`; un KO senza
+EC viene mostrato come `KO / EC NA`. `Other` viene mostrato come `Other KOs`
+senza attribuirgli un EC artificiale. Il TSV FLOW espone `ec_codes` come
+colonna aggiuntiva.
 
 Il denominatore di `flow_percent`, `taxon_percent` e `KO_percent` è il totale
 TPM espanso del pathway nello stesso campione. La somma degli archi
 `flow_percent` deve essere 100.
 
-FLOW può scrivere un alluvial PNG, un Sankey HTML o entrambi:
+Il PNG presenta due legende indipendenti, `Taxonomy | % of sample` e
+`Function (KO / EC) | % of sample`. Ogni voce riporta la percentuale del nodo
+nel campione corrente; il Sankey HTML riporta le stesse informazioni nei nodi
+e negli hover, insieme a nome funzionale, TPM e percentuale dell'arco.
+
+FLOW può scrivere un alluvial PNG, un Sankey HTML o entrambi. Rimane un unico
+flusso taxon → KO arricchito dagli EC: non viene generata una seconda vista
+taxon → EC e la struttura delle directory non cambia.
 
 ```text
 flowplot/<definiti|top20>/<pathway>/<rango>/
@@ -610,7 +621,7 @@ umana.
 | `build_orf_long_table()` | Restituisce soltanto la tabella lunga, senza il blocco audit. |
 | `get_ko_name_lookup()` | Espone i nomi KEGG di fallback contenuti nell'oggetto SQM. |
 | `extract_ko_ec_lookup()` | Riduce tutti gli EC a una riga deterministica per KO. |
-| `build_flow_ko_metadata()`, `join_flow_ko_metadata()` | Creano una descrizione univoca per KO e verificano che il join FLOW non gonfi il TPM. |
+| `build_flow_ko_metadata()`, `join_flow_ko_metadata()` | Creano metadati descrittivi ed EC univoci per KO e verificano che il join FLOW non gonfi il TPM. |
 | `get_ko_dir_name()` | Crea la directory leggibile `KO_EC...` usata da PIE. |
 
 ### Costruzione di tabelle e grafici
@@ -619,8 +630,9 @@ umana.
 |---|---|
 | `build_ko_plot_table()`, `build_ko_legend_labels()`, `make_ko_barplot()` | Preparano TSV, legenda e barplot FUNZ, inclusi Top N e campioni a denominatore zero. |
 | `build_enzyme_plot_table()`, `enzyme_palette()`, `make_enzyme_barplot()`, `make_enzyme_lineplot()` | Aggregano TPM per EC e costruiscono viste insieme o separate. |
-| `build_flow_table_for_rank()`, `build_flow_table_for_sample()` | Aggregano gli archi taxon-KO e calcolano le percentuali del singolo campione. |
-| `make_flow_plot()`, `make_flow_sankey()` | Rappresentano la stessa tabella FLOW come PNG alluvial o Sankey HTML. |
+| `build_flow_table_for_rank()`, `build_flow_table_for_sample()` | Aggregano gli archi taxon-KO, mantengono gli EC e calcolano le percentuali del singolo campione. |
+| `build_flow_legend_spec()` | Produce da un'unica tabella le etichette percentuali Taxonomy e Function KO/EC usate da entrambi i formati. |
+| `make_flow_plot()`, `make_flow_sankey()` | Rappresentano la stessa tabella e le stesse etichette come PNG alluvial o Sankey HTML. |
 | `make_taxonomy_plot()`, `extract_taxonomy_plot_data()` | Delegano la tassonomia generale a SQMtools e recuperano la tabella realmente usata dal grafico. |
 | `build_pathway_taxonomy_percent_table()`, `make_pathway_taxonomy_percent_plot()` | Ricalcolano la tassonomia percentuale del pathway sugli ORF TPM e mantengono i campioni vuoti sull'asse. |
 | `build_pie_chart_table()`, `make_pie_plot()` | Producono una tabella PIE autosufficiente e costruiscono tutte le annotazioni esclusivamente da essa. |
