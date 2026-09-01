@@ -13,6 +13,9 @@ required_packages_for_mode <- function(mode, flowplot_formats = c("png", "html")
   required <- common_required_packages
   if (mode %in% c("all", "flow")) {
     required <- c(required, "ggalluvial")
+    if ("png" %in% tolower(as.character(flowplot_formats))) {
+      required <- c(required, "ggnewscale")
+    }
     if ("html" %in% tolower(as.character(flowplot_formats))) {
       required <- c(required, "plotly", "htmlwidgets", "rmarkdown")
     }
@@ -2439,6 +2442,12 @@ build_flow_ko_metadata <- function(orf_long, ko_lookup) {
     lookup_names,
     ko_metadata$ko_id
   )
+  ko_metadata <- ko_metadata |>
+    left_join(
+      extract_ko_ec_lookup(orf_long),
+      by = "ko_id",
+      relationship = "one-to-one"
+    )
 
   if (anyDuplicated(ko_metadata$ko_id) > 0L) {
     stop("FLOW KO metadata keys must be unique.", call. = FALSE)
@@ -2460,8 +2469,11 @@ join_flow_ko_metadata <- function(summary_tbl, ko_meta, tolerance = 1e-10) {
       call. = FALSE
     )
   }
-  if (!all(c("ko_id", "KO_name") %in% colnames(ko_meta))) {
-    stop("FLOW KO metadata must contain ko_id and KO_name.", call. = FALSE)
+  if (!all(c("ko_id", "KO_name", "ec_codes") %in% colnames(ko_meta))) {
+    stop(
+      "FLOW KO metadata must contain ko_id, KO_name, and ec_codes.",
+      call. = FALSE
+    )
   }
   if (anyDuplicated(ko_meta$ko_id) > 0L) {
     stop(
@@ -2553,7 +2565,7 @@ build_flow_table_for_rank <- function(orf_long, rank, selected_samples, top_n_ta
 build_flow_table_for_sample <- function(flow_rank_table, pathway_name, rank, sample_name) {
   sample_tbl <- flow_rank_table |>
     filter(.data$sample == sample_name) |>
-    group_by(.data$taxon, .data$KO, .data$KO_name) |>
+    group_by(.data$taxon, .data$KO, .data$KO_name, .data$ec_codes) |>
     summarise(TPM = sum(.data$TPM), .groups = "drop") |>
     filter(.data$TPM > 0)
 
@@ -2594,7 +2606,7 @@ build_flow_table_for_sample <- function(flow_rank_table, pathway_name, rank, sam
     ) |>
     select(
       "pathway", "rank", "sample", "taxon", "KO",
-      "KO_name", "TPM", "taxon_percent", "KO_percent",
+      "KO_name", "ec_codes", "TPM", "taxon_percent", "KO_percent",
       "flow_percent"
     )
 
@@ -2602,9 +2614,94 @@ build_flow_table_for_sample <- function(flow_rank_table, pathway_name, rank, sam
   flow_tbl
 }
 
+build_flow_legend_spec <- function(flow_tbl, tolerance = 1e-6) {
+  required_columns <- c(
+    "taxon", "KO", "ec_codes", "taxon_percent", "KO_percent"
+  )
+  missing_columns <- setdiff(required_columns, colnames(flow_tbl))
+  if (length(missing_columns) > 0L) {
+    stop(
+      "FLOW legend data requires columns: ",
+      paste(missing_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (nrow(flow_tbl) == 0L) {
+    stop("FLOW legend data cannot be empty.", call. = FALSE)
+  }
+
+  taxon_levels <- if (is.factor(flow_tbl$taxon)) {
+    levels(flow_tbl$taxon)
+  } else {
+    unique(as.character(flow_tbl$taxon))
+  }
+  ko_levels <- if (is.factor(flow_tbl$KO)) {
+    levels(flow_tbl$KO)
+  } else {
+    unique(as.character(flow_tbl$KO))
+  }
+
+  taxonomy <- flow_tbl |>
+    transmute(
+      node = as.character(.data$taxon),
+      percent = as.numeric(.data$taxon_percent)
+    ) |>
+    distinct(.data$node, .data$percent) |>
+    arrange(match(.data$node, taxon_levels))
+  functional <- flow_tbl |>
+    transmute(
+      node = as.character(.data$KO),
+      ec_codes = as.character(.data$ec_codes),
+      percent = as.numeric(.data$KO_percent)
+    ) |>
+    distinct(.data$node, .data$ec_codes, .data$percent) |>
+    arrange(match(.data$node, ko_levels))
+
+  if (anyDuplicated(taxonomy$node) > 0L || anyDuplicated(functional$node) > 0L) {
+    stop(
+      "FLOW legend nodes must have one stable percentage and EC association.",
+      call. = FALSE
+    )
+  }
+  if (
+    anyNA(taxonomy$percent) || anyNA(functional$percent) ||
+      abs(sum(taxonomy$percent) - 100) > tolerance ||
+      abs(sum(functional$percent) - 100) > tolerance
+  ) {
+    stop("FLOW legend percentages must sum to 100 per section.", call. = FALSE)
+  }
+
+  taxonomy <- taxonomy |>
+    mutate(
+      display_name = .data$node,
+      label = paste0(
+        .data$display_name,
+        " | ",
+        format_ko_sample_percent(.data$percent)
+      )
+    )
+  functional <- functional |>
+    mutate(
+      display_name = case_when(
+        .data$node == "Other" ~ "Other KOs",
+        is.na(.data$ec_codes) | !nzchar(trimws(.data$ec_codes)) ~
+          paste0(.data$node, " / EC NA"),
+        TRUE ~ paste0(.data$node, " / EC ", .data$ec_codes)
+      ),
+      label = paste0(
+        .data$display_name,
+        " | ",
+        format_ko_sample_percent(.data$percent)
+      )
+    )
+
+  list(taxonomy = taxonomy, functional = functional)
+}
+
 make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
   taxon_levels <- levels(flow_tbl$taxon)
   ko_levels <- levels(flow_tbl$KO)
+  legend_spec <- build_flow_legend_spec(flow_tbl)
   lodes_tbl <- ggalluvial::to_lodes_form(flow_tbl, axes = c("taxon", "KO"), discern = FALSE) |>
     mutate(x = factor(.data$x, levels = c("taxon", "KO"), labels = c("Taxon", "KO")))
   tax_palette <- c(
@@ -2629,6 +2726,15 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
       color = "grey35",
       linewidth = 0.25
     ) +
+    scale_fill_manual(
+      name = "Taxonomy | % of sample",
+      values = tax_palette,
+      breaks = legend_spec$taxonomy$node,
+      labels = legend_spec$taxonomy$label,
+      drop = FALSE
+    ) +
+    guides(fill = guide_legend(order = 1, ncol = 1, byrow = TRUE)) +
+    ggnewscale::new_scale_fill() +
     ggalluvial::geom_stratum(
       data = dplyr::filter(lodes_tbl, .data$x == "KO"),
       aes(x = .data$x, stratum = .data$stratum, alluvium = .data$alluvium, y = .data$flow_percent, fill = .data$stratum),
@@ -2637,23 +2743,32 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
       color = "grey35",
       linewidth = 0.25
     ) +
+    scale_fill_manual(
+      name = "Function (KO / EC) | % of sample",
+      values = ko_palette,
+      breaks = legend_spec$functional$node,
+      labels = legend_spec$functional$label,
+      drop = FALSE
+    ) +
+    guides(fill = guide_legend(order = 2, ncol = 1, byrow = TRUE)) +
     geom_text(
       stat = ggalluvial::StatStratum,
       aes(label = after_stat(stratum)),
       size = 2.8
     ) +
     scale_x_discrete(limits = c("Taxon", "KO"), expand = c(0.08, 0.08)) +
-    scale_fill_manual(values = c(tax_palette, ko_palette[setdiff(names(ko_palette), names(tax_palette))]), drop = FALSE) +
     labs(
       title = paste0("Flowplot - ", pathway_name, " - ", rank, " - ", sample_name),
-      subtitle = "Taxonomy-to-KO flow from the ORF x sample x KO table",
+      subtitle = "Taxonomy-to-KO/EC flow from the ORF x sample x KO table",
       x = NULL,
-      y = "Relative flow (%)",
-      fill = rank
+      y = "Relative flow (%)"
     ) +
     theme_minimal(base_size = 12) +
     theme(
-      legend.position = "none",
+      legend.position = "right",
+      legend.title = element_text(face = "bold"),
+      legend.text = element_text(size = 8),
+      legend.key.size = grid::unit(0.55, "lines"),
       axis.text.y = element_blank(),
       panel.grid = element_blank(),
       plot.title = element_text(face = "bold")
@@ -2663,6 +2778,27 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
 make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
   tax_labels <- levels(flow_tbl$taxon)
   ko_labels <- levels(flow_tbl$KO)
+  legend_spec <- build_flow_legend_spec(flow_tbl)
+  tax_node_labels <- stats::setNames(
+    legend_spec$taxonomy$label,
+    legend_spec$taxonomy$node
+  )
+  functional_node_labels <- stats::setNames(
+    legend_spec$functional$label,
+    legend_spec$functional$node
+  )
+  taxon_percents <- stats::setNames(
+    legend_spec$taxonomy$percent,
+    legend_spec$taxonomy$node
+  )
+  functional_percents <- stats::setNames(
+    legend_spec$functional$percent,
+    legend_spec$functional$node
+  )
+  functional_names <- stats::setNames(
+    legend_spec$functional$display_name,
+    legend_spec$functional$node
+  )
   tax_palette <- c(
     stats::setNames(rep(colors_hex, length.out = length(setdiff(tax_labels, "Other"))), setdiff(tax_labels, "Other")),
     if ("Other" %in% tax_labels) c(Other = "grey70") else NULL
@@ -2683,7 +2819,10 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
       pad = 18,
       thickness = 18,
       line = list(color = "rgba(70,70,70,0.35)", width = 0.5),
-      label = c(tax_labels, ko_labels),
+      label = c(
+        unname(tax_node_labels[tax_labels]),
+        unname(functional_node_labels[ko_labels])
+      ),
       color = c(unname(tax_palette[tax_labels]), unname(ko_palette[ko_labels])),
       x = c(rep(0.02, length(tax_labels)), rep(0.98, length(ko_labels))),
       y = c(tax_y, ko_y)
@@ -2695,8 +2834,12 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
       color = unname(grDevices::adjustcolor(tax_palette[as.character(flow_tbl$taxon)], alpha.f = 0.65)),
       customdata = paste0(
         "Taxon: ", flow_tbl$taxon,
-        "<br>KO: ", flow_tbl$KO,
-        "<br>Name: ", flow_tbl$KO_name,
+        "<br>Taxon share: ",
+        format_ko_sample_percent(unname(taxon_percents[as.character(flow_tbl$taxon)])),
+        "<br>Function: ", unname(functional_names[as.character(flow_tbl$KO)]),
+        "<br>Function share: ",
+        format_ko_sample_percent(unname(functional_percents[as.character(flow_tbl$KO)])),
+        "<br>Function name: ", flow_tbl$KO_name,
         "<br>TPM: ", sprintf("%.3f", flow_tbl$TPM),
         "<br>Flow: ", sprintf("%.2f", flow_tbl$flow_percent), "%"
       ),
@@ -2707,7 +2850,7 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
       title = list(
         text = paste0(
           "Flowplot - ", pathway_name, " - ", rank, " - ", sample_name,
-          "<br><sup>ORF-linked taxon -> KO flow based on TPM</sup>"
+          "<br><sup>ORF-linked taxon -> KO / EC flow based on TPM</sup>"
         )
       ),
       font = list(size = 11),
