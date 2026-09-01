@@ -88,6 +88,7 @@ flow_orfs <- tibble::tibble(
   kegg_function = c(
     "Description B", "Description A", "Description A", " ", NA_character_
   ),
+  ec_codes = c("2.2.2.2", "1.1.1.1", "2.2.2.2", NA_character_, NA_character_),
   phylum = c("Alpha", "Alpha", "Beta", "Alpha", "Beta")
 )
 ko_lookup <- c(K00002 = "Lookup description")
@@ -116,9 +117,12 @@ flow_rank <- build_flow_table_for_rank(
   top_n_ko = 2L,
   ko_lookup = ko_lookup
 )
-build_flow_table_for_sample(
+flow_sample <- build_flow_table_for_sample(
   flow_rank,
   "Synthetic pathway",
   "phylum",
   "S0"
 )
+build_flow_legend_spec(flow_sample)
+make_flow_plot(flow_sample, "Synthetic pathway", "phylum", "S0")
+make_flow_sankey(flow_sample, "Synthetic pathway", "phylum", "S0")

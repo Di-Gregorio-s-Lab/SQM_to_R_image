@@ -68,6 +68,7 @@ duplicated_description_orfs <- tibble::tibble(
   tpm = c(10, 5, 15),
   ko_id = rep("K00001", 3L),
   kegg_function = c("Description B", "Description A", "Description A"),
+  ec_codes = c("2.2.2.2;1.1.1.1", "1.1.1.1", "2.2.2.2"),
   phylum = c("Alpha", "Alpha", "Beta")
 )
 
@@ -99,6 +100,10 @@ run_case("KO metadata join preserves FLOW edges and TPM", {
     all(rank_tbl$KO_name == "Description A; Description B"),
     "Distinct KO descriptions were not sorted and concatenated deterministically"
   )
+  expect_true(
+    all(rank_tbl$ec_codes == "1.1.1.1;2.2.2.2"),
+    "FLOW did not retain the complete deterministic KO/EC association"
+  )
 
   sample_tbl <- script_env$build_flow_table_for_sample(
     flow_rank_table = rank_tbl,
@@ -126,6 +131,9 @@ run_case("KO metadata uses normalized descriptions and ordered fallbacks", {
     ko_id = c("K00001", "K00001", "K00001", "K00002", "K00003"),
     kegg_function = c(
       " Description B ", "Description A", "Description A", "   ", NA_character_
+    ),
+    ec_codes = c(
+      "2.2.2.2;1.1.1.1", "1.1.1.1", "2.2.2.2", "", NA_character_
     )
   )
   metadata <- build_flow_ko_metadata(
@@ -145,6 +153,12 @@ run_case("KO metadata uses normalized descriptions and ordered fallbacks", {
     c("Description A; Description B", "Lookup description", "K00003"),
     "KO description normalization or fallback precedence changed"
   )
+  observed_ec <- stats::setNames(metadata$ec_codes, metadata$ko_id)
+  expect_identical(
+    unname(observed_ec[c("K00001", "K00002", "K00003")]),
+    c("1.1.1.1;2.2.2.2", NA_character_, NA_character_),
+    "FLOW KO/EC metadata did not preserve multiple or missing EC codes"
+  )
 })
 
 run_case("FLOW labels retain fallback and Other semantics", {
@@ -154,6 +168,7 @@ run_case("FLOW labels retain fallback and Other semantics", {
     tpm = c(12, 10, 8),
     ko_id = c("K00002", "K00003", "K00004"),
     kegg_function = c(" ", NA_character_, "Outside top N"),
+    ec_codes = c("2.2.2.2", NA_character_, "4.4.4.4"),
     phylum = rep("Alpha", 3L)
   )
 
@@ -171,6 +186,12 @@ run_case("FLOW labels retain fallback and Other semantics", {
     unname(observed_names[c("K00002", "K00003", "Other")]),
     c("Lookup description", "K00003", "Other KOs"),
     "FLOW KO fallback or Other label changed"
+  )
+  observed_ec <- stats::setNames(rank_tbl$ec_codes, rank_tbl$KO)
+  expect_true(
+    identical(unname(observed_ec[c("K00002", "K00003")]), c("2.2.2.2", NA_character_)) &&
+      is.na(unname(observed_ec[["Other"]])),
+    "FLOW EC metadata changed missing-EC or Other semantics"
   )
 
   sample_tbl <- script_env$build_flow_table_for_sample(
@@ -201,7 +222,8 @@ run_case("non-unique KO metadata fails the join postcondition", {
   )
   invalid_metadata <- tibble::tibble(
     ko_id = c("K00001", "K00001"),
-    KO_name = c("Description A", "Description B")
+    KO_name = c("Description A", "Description B"),
+    ec_codes = c("1.1.1.1", "2.2.2.2")
   )
 
   join_error <- tryCatch(
@@ -222,6 +244,169 @@ run_case("non-unique KO metadata fails the join postcondition", {
       ignore.case = TRUE
     ),
     "The invalid metadata failure must identify the violated join postcondition"
+  )
+})
+
+legend_orfs <- tibble::tibble(
+  orf_id = c("orf_multi_a", "orf_multi_b", "orf_missing", "orf_other"),
+  sample = rep("S_legend", 4L),
+  tpm = c(40, 20, 30, 10),
+  ko_id = c("K00001", "K00001", "K00002", "K00003"),
+  kegg_function = c("Multi EC", "Multi EC", "Missing EC", "Outside Top N"),
+  ec_codes = c("2.2.2.2;1.1.1.1", "1.1.1.1", NA_character_, "3.3.3.3"),
+  phylum = c("Alpha", "Alpha", "Beta", "Beta")
+)
+
+run_case("FLOW legend module exposes taxonomy and KO/EC percentages", {
+  build_flow_legend_spec <- require_script_function(
+    script_env,
+    "build_flow_legend_spec"
+  )
+  rank_tbl <- script_env$build_flow_table_for_rank(
+    orf_long = legend_orfs,
+    rank = "phylum",
+    selected_samples = "S_legend",
+    top_n_taxa = 2L,
+    top_n_ko = 2L,
+    ko_lookup = character()
+  )
+  sample_tbl <- script_env$build_flow_table_for_sample(
+    rank_tbl,
+    "Synthetic pathway",
+    "phylum",
+    "S_legend"
+  )
+  expect_true(
+    "ec_codes" %in% colnames(sample_tbl),
+    "The append-only FLOW TSV schema is missing ec_codes"
+  )
+
+  legend_spec <- build_flow_legend_spec(sample_tbl)
+  expect_identical(
+    names(legend_spec),
+    c("taxonomy", "functional"),
+    "FLOW legend module changed its two-section interface"
+  )
+  expect_identical(
+    legend_spec$taxonomy$label,
+    c("Beta | 40.0%", "Alpha | 60.0%"),
+    "Taxonomy legend labels or factor order changed"
+  )
+  expect_identical(
+    legend_spec$functional$label,
+    c(
+      "K00002 / EC NA | 30.0%",
+      "K00001 / EC 1.1.1.1;2.2.2.2 | 60.0%",
+      "Other KOs | 10.0%"
+    ),
+    "Functional KO/EC legend labels or factor order changed"
+  )
+  expect_number(
+    sum(legend_spec$taxonomy$percent),
+    100,
+    "Taxonomy legend percentages do not sum to 100",
+    tolerance = 1e-6
+  )
+  expect_number(
+    sum(legend_spec$functional$percent),
+    100,
+    "Functional legend percentages do not sum to 100",
+    tolerance = 1e-6
+  )
+})
+
+run_case("FLOW PNG exposes two native legend sections", {
+  rank_tbl <- script_env$build_flow_table_for_rank(
+    legend_orfs,
+    "phylum",
+    "S_legend",
+    2L,
+    2L,
+    character()
+  )
+  sample_tbl <- script_env$build_flow_table_for_sample(
+    rank_tbl,
+    "Synthetic pathway",
+    "phylum",
+    "S_legend"
+  )
+  plot_object <- script_env$make_flow_plot(
+    sample_tbl,
+    "Synthetic pathway",
+    "phylum",
+    "S_legend"
+  )
+  scale_titles <- vapply(
+    plot_object$scales$scales,
+    function(scale) {
+      if (is.character(scale$name) && length(scale$name) == 1L) scale$name else NA_character_
+    },
+    character(1)
+  )
+  expect_true(
+    all(c(
+      "Taxonomy | % of sample",
+      "Function (KO / EC) | % of sample"
+    ) %in% stats::na.omit(scale_titles)),
+    "FLOW PNG does not expose two independently titled legend scales"
+  )
+
+  png_path <- tempfile("flow_two_legends_", fileext = ".png")
+  on.exit(unlink(png_path, force = TRUE), add = TRUE)
+  ggplot2::ggsave(
+    filename = png_path,
+    plot = plot_object,
+    width = 12,
+    height = 9,
+    dpi = 75,
+    units = "in"
+  )
+  expect_true(
+    file.exists(png_path) && file.info(png_path)$size > 0L,
+    "FLOW PNG with two legends did not render at 75 DPI"
+  )
+})
+
+run_case("FLOW Sankey nodes and hover expose percentages and KO/EC", {
+  rank_tbl <- script_env$build_flow_table_for_rank(
+    legend_orfs,
+    "phylum",
+    "S_legend",
+    2L,
+    2L,
+    character()
+  )
+  sample_tbl <- script_env$build_flow_table_for_sample(
+    rank_tbl,
+    "Synthetic pathway",
+    "phylum",
+    "S_legend"
+  )
+  widget <- script_env$make_flow_sankey(
+    sample_tbl,
+    "Synthetic pathway",
+    "phylum",
+    "S_legend"
+  )
+  trace <- plotly::plotly_build(widget)$x$data[[1L]]
+  node_labels <- as.character(unlist(trace$node$label, use.names = FALSE))
+  hover_text <- as.character(unlist(trace$link$customdata, use.names = FALSE))
+
+  expect_true(
+    all(c(
+      "Alpha | 60.0%",
+      "K00001 / EC 1.1.1.1;2.2.2.2 | 60.0%",
+      "Other KOs | 10.0%"
+    ) %in% node_labels),
+    "FLOW Sankey node labels omit taxonomy or KO/EC percentages"
+  )
+  expect_true(
+    any(grepl("Taxon share: 60.0%", hover_text, fixed = TRUE)) &&
+      any(grepl("Function: K00001 / EC 1.1.1.1;2.2.2.2", hover_text, fixed = TRUE)) &&
+      any(grepl("Function share: 60.0%", hover_text, fixed = TRUE)) &&
+      any(grepl("TPM:", hover_text, fixed = TRUE)) &&
+      any(grepl("Flow:", hover_text, fixed = TRUE)),
+    "FLOW Sankey hover does not retain KO/EC, node shares, TPM, and flow percent"
   )
 })
 

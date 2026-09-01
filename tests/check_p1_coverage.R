@@ -23,7 +23,8 @@ target_functions <- c(
   "select_context_pathway_groups",
   "build_flow_ko_metadata",
   "join_flow_ko_metadata",
-  "build_flow_table_for_rank"
+  "build_flow_table_for_rank",
+  "build_flow_legend_spec"
 )
 function_results <- lapply(target_functions, function(function_name) {
   rows <- coverage_table[
