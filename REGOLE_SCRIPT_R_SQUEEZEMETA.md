@@ -256,6 +256,14 @@ globale e la etichetti come tale.
 Dopo l'aggregazione verificare, con una tolleranza numerica, che le percentuali
 attese sommino a 100 per ciascun gruppo pertinente.
 
+Eccezione esplicita: `taxonomy_global/percent` prodotto da
+`SQMtools::plotTaxonomy()` mantiene il comportamento nativo non riscalato con
+`ignore_unmapped=TRUE` e `ignore_unclassified=TRUE`. Le barre rappresentano
+quote della libreria totale e possono quindi sommare a meno di 100. Il TSV
+deve riportare `denominator_type`, `denominator_value`, la somma mostrata, la
+quota esclusa e i nomi delle categorie escluse; la verifica pertinente è
+`displayed_percent_sum + excluded_percent = 100` per campione.
+
 ## 7. Output e tracciabilità
 
 ### 7.1 Directory
@@ -306,6 +314,12 @@ colori_hex <- c(
   "#ff55a3", "#fb607f", "#004225", "#cd7f32", "#a52a2a", "#ffc1cc",
   "#e7feff", "#f0dc82"
 )
+
+Eccezione esplicita: i grafici creati da `SQMtools::plotTaxonomy()` conservano
+la palette nativa di SQMtools. Non passare a `plotTaxonomy()` l'intero vettore
+`colori_hex`, perché la funzione richiede un numero di colori coerente con
+`N` e altrimenti lo ignora emettendo un warning. Questa eccezione non si
+applica agli altri grafici dello script.
 
 ## 8. Gestione degli errori
 

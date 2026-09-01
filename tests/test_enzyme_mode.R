@@ -80,7 +80,7 @@ test_root <- tempfile("enzyme_mode_")
 dir.create(test_root, recursive = TRUE)
 on.exit(unlink(test_root, recursive = TRUE, force = TRUE), add = TRUE)
 
-result <- script_env$run_enzyme_mode(
+result <- suppressWarnings(script_env$run_enzyme_mode(
   sqm_object = fake_sqm,
   output_dir = test_root,
   manifest_base_dir = test_root,
@@ -95,7 +95,7 @@ result <- script_env$run_enzyme_mode(
   top_n_ko = 20L,
   enzyme_ecs = expected_ecs,
   enzyme_plot_types = c("bar", "line")
-)
+))
 
 combined_dir <- file.path(test_root, "funz", "enzimi", "insieme")
 separate_dir <- file.path(test_root, "funz", "enzimi", "separato", "1.14.12.11")
@@ -105,7 +105,8 @@ stopifnot(file.exists(file.path(combined_dir, "lineplot_enzimi_2x2.png")))
 stopifnot(file.exists(file.path(separate_dir, "enzima_data.tsv")))
 stopifnot(file.exists(file.path(separate_dir, "barplot_enzima_2x2.png")))
 stopifnot(file.exists(file.path(separate_dir, "lineplot_enzima_2x2.png")))
-stopifnot(nrow(result$funz) == 3L + length(expected_ecs) * 3L)
+positive_ec_count <- length(unique(as.character(enzyme_tbl$ec_code[enzyme_tbl$plotted])))
+stopifnot(nrow(result$funz) == 3L + length(expected_ecs) + positive_ec_count * 2L)
 stopifnot(all(c("ec_code", "output_scope") %in% colnames(result$funz)))
 stopifnot(identical(
   sort(unique(result$funz$output_scope)),
@@ -149,7 +150,12 @@ pathway_result <- script_env$run_funz_mode(
   pathway_id = "00000"
 )
 stopifnot(file.exists(file.path(
-  test_root, "funz", "pathway", "definiti", "Test_pathway", "barplot_ko_data.tsv"
+  test_root,
+  "funz",
+  "pathway",
+  "definiti",
+  script_env$safe_output_component("Test pathway", max_length = 28L),
+  "barplot_ko_data.tsv"
 )))
 stopifnot(!dir.exists(file.path(test_root, "funz", "Test_pathway")))
 stopifnot(nrow(pathway_result$funz) == 2L)

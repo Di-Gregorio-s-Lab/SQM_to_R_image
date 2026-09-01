@@ -73,6 +73,52 @@ stopifnot(length(percent_sums) > 0L)
 stopifnot(all(abs(percent_sums - 100) <= 1e-6))
 stopifnot(all(positive_rows$denominator == positive_rows$pathway_tpm))
 
+taxonomy_warnings <- character()
+global_plot <- withCallingHandlers(
+  script_env$make_taxonomy_plot(
+    sqm_object = sqm,
+    rank = "phylum",
+    count = "percent",
+    selected_samples = colnames(sqm$orfs$tpm),
+    top_n_taxa = 15L,
+    ignore_unmapped = TRUE,
+    ignore_unclassified = TRUE
+  ),
+  warning = function(warning_condition) {
+    taxonomy_warnings <<- c(taxonomy_warnings, conditionMessage(warning_condition))
+    invokeRestart("muffleWarning")
+  }
+)
+direct_plot <- SQMtools::plotTaxonomy(
+  SQM = SQMtools::subsetSamples(sqm, samples = colnames(sqm$orfs$tpm)),
+  rank = "phylum",
+  count = "percent",
+  N = 15L,
+  ignore_unmapped = TRUE,
+  ignore_unclassified = TRUE,
+  no_partial_classifications = FALSE
+)
+stopifnot(identical(global_plot$data, direct_plot$data))
+palette_size <- length(unique(global_plot$data$item))
+stopifnot(identical(
+  global_plot$scales$scales[[1L]]$palette(palette_size),
+  direct_plot$scales$scales[[1L]]$palette(palette_size)
+))
+stopifnot(!any(grepl("colors", taxonomy_warnings, ignore.case = TRUE)))
+
+global_data <- script_env$extract_taxonomy_plot_data(global_plot, "percent")
+global_data <- script_env$add_global_taxonomy_percent_metadata(
+  global_data,
+  sqm_object = sqm,
+  rank = "phylum",
+  selected_samples = colnames(sqm$orfs$tpm)
+)
+s13_sum <- unique(global_data$displayed_percent_sum[global_data$sample == "S13_1_8"])
+stopifnot(length(s13_sum) == 1L, abs(s13_sum - 21.18628) <= 1e-5)
+stopifnot(all(abs(
+  global_data$displayed_percent_sum + global_data$excluded_percent - 100
+) <= 1e-6))
+
 message(
   "PASS: P0 integration checks completed | Bacillota ORFs=",
   length(expected_orf_ids),

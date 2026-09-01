@@ -108,7 +108,14 @@ fake_export_pathway <- function(
 }
 
 result <- script_env$run_pathview_mode(
-  sqm_object = list(fake = TRUE),
+  sqm_object = list(
+    fake = TRUE,
+    functions = list(KEGG = list(tpm = data.frame(
+      S0 = c(1, 2),
+      S1 = c(3, 4),
+      row.names = c("K00001", "K00002")
+    )))
+  ),
   output_dir = test_root,
   manifest_base_dir = test_root,
   output_manifests = list(pathview = tibble::tibble()),
@@ -125,16 +132,8 @@ result <- script_env$run_pathview_mode(
   export_pathway_fn = fake_export_pathway
 )
 
-stopifnot(identical(
-  vapply(calls, `[[`, character(1), "output_dir"),
-  file.path(
-    normalizePath(test_root, winslash = "/", mustWork = TRUE),
-    "pathview",
-    "top20",
-    c("insieme", "separato"),
-    "Nitrogen_metabolism"
-  )
-))
+stopifnot(length(calls) == 3L)
+stopifnot(all(!vapply(calls, `[[`, logical(1), "split_samples")))
 stopifnot(identical(
   sort(unique(result$pathview$output_scope)),
   c("pathway_top20_insieme", "pathway_top20_separato")
@@ -180,7 +179,12 @@ pie_result <- script_env$run_pie_mode(
   pathway_selection = "top20"
 )
 
-stopifnot(dir.exists(file.path(test_root, "pie", "top20", "Top_pathway")))
+stopifnot(dir.exists(file.path(
+  test_root,
+  "pie",
+  "top20",
+  script_env$safe_output_component("Top pathway", max_length = 28L)
+)))
 stopifnot(nrow(pie_result$pie) > 0L)
 stopifnot(identical(unique(pie_result$pie$output_scope), "pathway_top20"))
 

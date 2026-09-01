@@ -24,6 +24,12 @@ target_functions <- c(
   "build_ko_plot_table",
   "build_pie_chart_table",
   "parse_positive_integer_arg",
+  "validate_tax_mode",
+  "validate_tpm_matrix",
+  "validate_sqm_tpm_inputs",
+  "build_enzyme_plot_table",
+  "make_enzyme_barplot",
+  "make_enzyme_lineplot",
   "build_ko_expansion_audit",
   "build_orf_long_result",
   "normalize_manifest_ko_audit"

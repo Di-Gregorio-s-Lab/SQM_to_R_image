@@ -26,6 +26,12 @@ for (value in list("1.5", "0", "2147483648", NA_character_, 1L, character())) {
   try(parse_positive_integer_arg(value, "top_n_ko"), silent = TRUE)
 }
 
+validate_tax_mode("prokfilter")
+try(validate_tax_mode("invalid"), silent = TRUE)
+validate_tpm_matrix(data.frame(S = c(0, 1)), "valid TPM")
+try(validate_tpm_matrix(data.frame(S = "invalid"), "invalid TPM"), silent = TRUE)
+try(validate_tpm_matrix(data.frame(S = Inf), "invalid TPM"), silent = TRUE)
+
 orf_ids <- c("orf_none", "orf_mono", "orf_multi")
 pathway_sqm <- list(
   orfs = list(
@@ -59,6 +65,72 @@ pathway_sqm <- list(
       K00003 = "Lookup three"
     )
   )
+)
+
+validate_sqm_tpm_inputs(pathway_sqm, c("S_positive", "S_zero"))
+try(validate_sqm_tpm_inputs(pathway_sqm, "missing"), silent = TRUE)
+pathway_sqm$functions <- list(KEGG = list(tpm = data.frame(
+  S_positive = c(10, 20),
+  S_zero = c(0, 0),
+  row.names = c("K00001", "K00002")
+)))
+validate_sqm_tpm_inputs(
+  pathway_sqm,
+  c("S_positive", "S_zero"),
+  require_kegg_tpm = TRUE
+)
+try(
+  validate_sqm_tpm_inputs(
+    within(pathway_sqm, rm(functions)),
+    "S_positive",
+    require_kegg_tpm = TRUE
+  ),
+  silent = TRUE
+)
+
+enzyme_sqm <- list(
+  orfs = list(
+    table = data.frame(
+      `KEGG ID` = c("K00001", "K00002"),
+      KEGGFUN = c("Observed [EC:1.1.1.1]", "Other [EC:9.9.9.9]"),
+      row.names = c("orf_a", "orf_b"),
+      check.names = FALSE
+    ),
+    tpm = data.frame(
+      S_positive = c(10, 20),
+      S_zero = c(5, 0),
+      row.names = c("orf_a", "orf_b")
+    )
+  )
+)
+enzyme_table <- build_enzyme_plot_table(
+  enzyme_sqm,
+  c("S_positive", "S_zero"),
+  c("1.1.1.1", "2.2.2.2")
+)
+make_enzyme_barplot(enzyme_table, "Synthetic enzymes")
+make_enzyme_lineplot(enzyme_table, "Synthetic enzymes")
+duplicate_enzyme_sqm <- enzyme_sqm
+attr(duplicate_enzyme_sqm$orfs$table, "row.names") <- c("orf_a", "orf_a")
+try(
+  build_enzyme_plot_table(duplicate_enzyme_sqm, "S_positive", "1.1.1.1"),
+  silent = TRUE
+)
+mismatched_enzyme_sqm <- enzyme_sqm
+rownames(mismatched_enzyme_sqm$orfs$tpm)[[2L]] <- "different"
+try(
+  build_enzyme_plot_table(mismatched_enzyme_sqm, "S_positive", "1.1.1.1"),
+  silent = TRUE
+)
+missing_function_sqm <- enzyme_sqm
+missing_function_sqm$orfs$table$KEGGFUN <- NULL
+try(
+  build_enzyme_plot_table(missing_function_sqm, "S_positive", "1.1.1.1"),
+  silent = TRUE
+)
+try(
+  build_enzyme_plot_table(enzyme_sqm, "missing", "1.1.1.1"),
+  silent = TRUE
 )
 
 audit <- build_ko_expansion_audit(pathway_sqm$orfs$table)

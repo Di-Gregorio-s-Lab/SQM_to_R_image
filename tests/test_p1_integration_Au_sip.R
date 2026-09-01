@@ -123,6 +123,17 @@ known_non_pathways <- c(
 )
 stopifnot(all(global_actual$pathway_root %in% allowed_roots))
 stopifnot(!any(global_actual$canonical_pathway_name %in% known_non_pathways))
+transporters_error <- tryCatch(
+  {
+    script_env$resolve_pathways(sqm, "Transporters")
+    NA_character_
+  },
+  error = function(error) conditionMessage(error)
+)
+stopifnot(
+  !is.na(transporters_error),
+  grepl("not a KEGG PATHWAY", transporters_error, fixed = TRUE)
+)
 
 bacillota <- script_env$resolve_taxa_filters(sqm, "Bacillota")[[1]]
 bacillota_sqm <- script_env$subset_sqm_by_taxon(sqm, bacillota$orf_ids)

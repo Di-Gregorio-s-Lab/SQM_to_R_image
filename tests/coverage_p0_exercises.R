@@ -5,9 +5,9 @@
 mapping_sqm <- list(
   misc = list(
     KEGG_paths = c(
-      "Carbon fixation in photosynthetic organisms",
-      "Nitrotoluene degradation",
-      "Nitrogen metabolism"
+      "Metabolism; Energy metabolism; Carbon fixation in photosynthetic organisms",
+      "Metabolism; Xenobiotics biodegradation and metabolism; Nitrotoluene degradation",
+      "Metabolism; Energy metabolism; Nitrogen metabolism"
     )
   )
 )
@@ -18,7 +18,7 @@ try(resolve_pathways(mapping_sqm, "p00910"), silent = TRUE)
 try(resolve_pathways(mapping_sqm, "Nitrogen"), silent = TRUE)
 try(resolve_pathways(mapping_sqm, "No matching pathway"), silent = TRUE)
 resolve_pathways(
-  list(misc = list(KEGG_paths = "Uncurated pathway")),
+  list(misc = list(KEGG_paths = "Metabolism; Synthetic category; Uncurated pathway")),
   "Uncurated pathway"
 )
 pathview_is_exportable("defined", "00910")
@@ -97,6 +97,53 @@ try(
     "S_positive",
     2L,
     "Synthetic pathway"
+  ),
+  silent = TRUE
+)
+
+global_taxonomy_sqm <- list(
+  total_reads = c(S_positive = 100),
+  taxa = list(phylum = list(percent = matrix(
+    c(70, 10, 20),
+    ncol = 1L,
+    dimnames = list(c("Unmapped", "Unclassified", "Alpha"), "S_positive")
+  )))
+)
+global_plot_data <- tibble::tibble(
+  sample = "S_positive",
+  taxon = "Alpha",
+  value = 20,
+  count = "percent"
+)
+add_global_taxonomy_percent_metadata(
+  global_plot_data,
+  global_taxonomy_sqm,
+  "phylum",
+  "S_positive"
+)
+no_exclusion_sqm <- global_taxonomy_sqm
+no_exclusion_sqm$taxa$phylum$percent <- matrix(
+  100,
+  ncol = 1L,
+  dimnames = list("Alpha", "S_positive")
+)
+add_global_taxonomy_percent_metadata(
+  tibble::tibble(
+    sample = "S_positive",
+    taxon = "Alpha",
+    value = 100,
+    count = "percent"
+  ),
+  no_exclusion_sqm,
+  "phylum",
+  "S_positive"
+)
+try(
+  add_global_taxonomy_percent_metadata(
+    global_plot_data |> dplyr::select(-.data$count),
+    global_taxonomy_sqm,
+    "phylum",
+    "S_positive"
   ),
   silent = TRUE
 )

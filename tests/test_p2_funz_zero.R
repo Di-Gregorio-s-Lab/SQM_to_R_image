@@ -191,7 +191,10 @@ run_case("all-zero FUNZ writes sentinels and skips only the PNG", {
 
   pathway_dir <- file.path(
     test_root,
-    "funz", "pathway", "definiti", "All_zero_pathway"
+    "funz",
+    "pathway",
+    "definiti",
+    script_env$safe_output_component("All zero pathway", max_length = 28L)
   )
   tsv_path <- file.path(pathway_dir, "barplot_ko_data.tsv")
   expect_true(file.exists(tsv_path), "All-zero FUNZ did not write its sentinel TSV")

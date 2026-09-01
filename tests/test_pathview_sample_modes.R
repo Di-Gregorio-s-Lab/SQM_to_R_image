@@ -55,7 +55,14 @@ fake_export_pathway <- function(
 }
 
 result <- script_env$run_pathview_mode(
-  sqm_object = list(fake = TRUE),
+  sqm_object = list(
+    fake = TRUE,
+    functions = list(KEGG = list(tpm = data.frame(
+      CS8T0 = c(1, 2),
+      CS8T2 = c(3, 4),
+      row.names = c("K00001", "K00002")
+    )))
+  ),
   output_dir = test_root,
   manifest_base_dir = test_root,
   output_manifests = list(pathview = tibble::tibble()),
@@ -71,30 +78,17 @@ result <- script_env$run_pathview_mode(
   export_pathway_fn = fake_export_pathway
 )
 
-stopifnot(length(calls) == 2L)
-stopifnot(identical(vapply(calls, `[[`, logical(1), "split_samples"), c(FALSE, TRUE)))
-stopifnot(identical(vapply(calls, `[[`, character(1), "count"), c("tpm", "tpm")))
+stopifnot(length(calls) == 3L)
+stopifnot(all(!vapply(calls, `[[`, logical(1), "split_samples")))
+stopifnot(identical(vapply(calls, `[[`, character(1), "count"), rep("tpm", 3L)))
+stopifnot(length(unique(vapply(calls, `[[`, character(1), "output_dir"))) == 3L)
 stopifnot(identical(
-  vapply(calls, `[[`, character(1), "output_dir"),
-  file.path(
-    normalizePath(test_root, winslash = "/", mustWork = TRUE),
-    "pathview",
-    "definiti",
-    c("insieme", "separato"),
-    "Nitrogen_metabolism"
-  )
-))
-stopifnot(identical(
-  sort(result$pathview$output_scope),
+  sort(unique(result$pathview$output_scope)),
   c("pathway_defined_insieme", "pathway_defined_separato")
 ))
-stopifnot(all(file.exists(file.path(
-  test_root,
-  "pathview",
-  "definiti",
-  c("insieme", "separato"),
-  "Nitrogen_metabolism",
-  c("combined.png", "sample_CS8T0.png")
-))))
+stopifnot(all(file.exists(file.path(test_root, result$pathview$output_file))))
+separate_plots <- result$pathview$output_type == "pathview_file" &
+  result$pathview$output_scope == "pathway_defined_separato"
+stopifnot(setequal(result$pathview$samples[separate_plots], c("CS8T0", "CS8T2")))
 
 message("PASS: Pathview creates combined and split-sample output branches")

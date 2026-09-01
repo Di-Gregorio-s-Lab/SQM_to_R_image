@@ -35,7 +35,10 @@ expected_pathways <- c(
 legacy_wrong_ids <- c("00622", "00642", "00643")
 
 fake_sqm <- list(
-  misc = list(KEGG_paths = names(expected_pathways))
+  misc = list(KEGG_paths = paste(
+    "Metabolism; Synthetic pathway category;",
+    names(expected_pathways)
+  ))
 )
 
 for (canonical_name in names(expected_pathways)) {
@@ -140,7 +143,14 @@ fake_export_pathway <- function(
 
 pathview_result <- tryCatch(
   script_env$run_pathview_mode(
-    sqm_object = list(fake = TRUE),
+    sqm_object = list(
+      fake = TRUE,
+      functions = list(KEGG = list(tpm = data.frame(
+        S0 = c(1, 2),
+        S1 = c(3, 4),
+        row.names = c("K00001", "K00002")
+      )))
+    ),
     output_dir = test_root,
     manifest_base_dir = test_root,
     output_manifests = list(pathview = tibble::tibble()),
