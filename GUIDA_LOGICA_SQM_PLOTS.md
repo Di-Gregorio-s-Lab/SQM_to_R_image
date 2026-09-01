@@ -53,7 +53,7 @@ e gli EC soltanto dal blocco `[EC:...]` di `KEGGFUN`.
 flowchart TD
     A[Avvio da terminale] --> B[Preflight dei package]
     B --> C[Parsing e validazione CLI]
-    C --> D[Creazione output_dir]
+    C --> D[Creazione output_dir e run_id]
     D --> E[loadSQM una sola volta]
     E --> F[Validazione struttura SQM]
     F --> G[Selezione campioni]
@@ -71,8 +71,8 @@ flowchart TD
     N --> Q
     O --> Q
     P --> Q
-    Q --> R[Validazione manifest di sezione]
-    R --> S[Rigenerazione manifest_all.tsv]
+    Q --> R[Validazione manifest della corsa]
+    R --> S[manifest_all e manifest_run separati per run_id]
 ```
 
 ### 1. Preflight prima di caricare le librerie
@@ -144,9 +144,11 @@ nascosto. Dopo il caricamento, lo script richiede `orfs$table`, `orfs$tax` e
 
 ### 4. Selezione dei campioni
 
-Se `--samples` non è specificato, vengono usati tutti i campioni presenti in
-`orfs$tpm`. Se è specificato, ogni nome deve esistere. L'ordine richiesto viene
-conservato nei grafici multicampione.
+Se `--samples` non è specificato, vengono usati tutti i campioni nell'ordine
+delle colonne di `orfs$tpm`; il manifest registra
+`sample_order_basis=sqm_column_order`. Se è specificato, ogni nome deve
+esistere e l'ordine CLI viene conservato esattamente, con
+`sample_order_basis=cli`.
 
 ### 5. Costruzione dei contesti tassonomici
 
@@ -160,8 +162,8 @@ Per ogni taxon lo script:
 2. richiede che il nome compaia in un solo rango, altrimenti lo considera
    ambiguo;
 3. conserva gli `orf_id` corrispondenti nel loro ordine originale;
-4. chiama `subsetORFs()` con `tax_source="orfs"` e senza riscalare TPM o copy
-   number;
+4. chiama `subsetORFs()` con `tax_source="orfs"`,
+   `ignore_unclassified_functions=FALSE` e senza riscalare TPM o copy number;
 5. controlla che gli ID restituiti coincidano esattamente, anche nell'ordine,
    con quelli richiesti.
 
@@ -221,8 +223,10 @@ nome, radice e categoria.
 ### 7. Subset del pathway
 
 Ogni pathway selezionato viene trasformato in un oggetto SQM più piccolo con
-`subsetFun()`, cercando il nome canonico nella colonna `KEGGPATH` con confronto
-letterale. Da questo oggetto derivano FUNZ, FLOW, tassonomia per pathway e PIE.
+`subsetFun(..., allow_empty=TRUE)`, cercando il nome canonico nella colonna
+`KEGGPATH` con confronto letterale. Un subset vuoto produce un warning, viene
+registrato nel manifest di corsa e salta soltanto quel `contesto × pathway`;
+la tassonomia globale e le altre combinazioni continuano.
 
 ## La tabella centrale ORF × campione × KO
 
@@ -327,7 +331,8 @@ La tabella include anche combinazioni campione-EC assenti, con TPM zero.
 Se un ORF contiene più EC richiesti, il suo TPM contribuisce a ciascuna
 associazione EC. Lo script produce una vista con tutti gli EC insieme e una
 vista separata per ciascun EC, in formato TSV e, secondo configurazione,
-barplot e line plot.
+barplot e line plot. Le linee seguono soltanto l'ordine CLI o delle colonne SQM:
+non dichiarano che i campioni siano una serie temporale.
 
 ```text
 funz/enzimi/insieme/
@@ -405,14 +410,19 @@ cifre. Se l'ID non è disponibile, il flusso principale emette un warning e
 salta soltanto questa sezione.
 
 Per ciascun pathway esportabile, `exportPathway()` riceve l'oggetto del
-contesto, l'ID, i campioni e `count="tpm"`. Le modalità sono:
+contesto, l'ID, i campioni, `count="tpm"` e `log_scale=FALSE`. Le modalità sono:
 
 - `insieme`: i campioni vengono esportati con `split_samples=FALSE`;
-- `separato`: i campioni vengono esportati con `split_samples=TRUE`.
+- `separato`: ogni campione viene esportato in una chiamata distinta, sempre
+  con `split_samples=FALSE`.
 
-Lo script confronta i file presenti prima e dopo l'esportazione e registra gli
-artefatti prodotti. Pathview usa il servizio KEGG live: una indisponibilità
-esterna resta una possibile causa di errore.
+Ogni chiamata usa una directory temporanea isolata e trasferisce soltanto gli
+artefatti appena prodotti. Pathview conserva i colori nativi. Il file
+`pathview_input_all_ko_complete_matrix__<run_id>.tsv` contiene la matrice
+completa dei KO forniti e non pretende di identificare i soli nodi disegnati;
+il config registra `log_scale=FALSE`, `pseudocount=NA` e
+`color_source=pathview_native`. Pathview usa il servizio KEGG live: una
+indisponibilità esterna resta una possibile causa di errore.
 
 ```text
 pathview/<definiti|top20>/<insieme|separato>/<pathway>/
@@ -472,8 +482,9 @@ e invariato. Oltre la soglia, lo script accorcia soltanto il filename:
 Il token dipende deterministicamente dal nome logico completo. Se la directory
 è già troppo lunga per contenere prefisso minimo, token, dimensione ed
 estensione, lo script si ferma prima di `ggsave()` e chiede un `output_dir` più
-corto. La compattazione riguarda i PNG generati con `ggsave()`; i nomi prodotti
-esternamente da Pathview restano invariati.
+corto. La compattazione riguarda i PNG generati con `ggsave()`. Tutti i file,
+inclusi quelli prodotti esternamente da Pathview, ricevono `__<run_id>` prima
+dell'estensione; le directory restano invariate.
 
 ## Come funzionano i manifest
 
@@ -488,27 +499,28 @@ Prima di scrivere un manifest di sezione:
 3. deve risolversi dentro `output_dir`;
 4. deve indicare un file regolare, esistente e non vuoto.
 
-Se una riga nuova non rispetta queste condizioni, la run si ferma prima di
-riscrivere il manifest esistente. Le righe storiche stale, invece, vengono
-rimosse con warning. Le righe nuove hanno precedenza sui duplicati.
+Se una riga nuova non rispetta queste condizioni, la run si ferma. I manifest
+storici non vengono letti, uniti, potati o riscritti: ogni file descrive una
+sola corsa identificata dal proprio `run_id`.
 
 I manifest sono:
 
 ```text
-flowplot/manifest_flow.tsv
-funz/manifest_funz.tsv
-manifest_taxon.tsv
-pathview/manifest_pathview.tsv
-pie/manifest_pie.tsv
-manifest_all.tsv
+flowplot/manifest_flow__<run_id>.tsv
+funz/manifest_funz__<run_id>.tsv
+manifest_taxon__<run_id>.tsv
+pathview/manifest_pathview__<run_id>.tsv
+pie/manifest_pie__<run_id>.tsv
+manifest_all__<run_id>.tsv
+manifest_run__<run_id>.tsv
 ```
 
-Alla fine, tutte le sezioni già presenti in `output_dir` vengono riconciliate,
-anche se non sono state toccate dalla modalità corrente. `manifest_all.tsv`
-viene rigenerato da zero e contiene soltanto manifest di sezione esistenti,
-non vuoti e già validati. Un manifest legacy privo della colonna `output_file`
-viene trattato interamente come stale, con warning, senza bloccare la
-riconciliazione.
+Alla fine, `manifest_all__<run_id>.tsv` indicizza soltanto i manifest di sezione
+prodotti dalla corsa corrente. `manifest_run__<run_id>.tsv` registra stato,
+orari, CLI, campioni, origine dell'ordine, warning e pathway saltati. Se la
+corsa fallisce, gli artefatti parziali restano disponibili e sono elencati in
+`manifest_failed_artifacts__<run_id>.tsv`; il processo termina comunque con
+codice non zero.
 
 ## Errori, warning e salti controllati
 
@@ -526,10 +538,10 @@ scientificamente falsi, per esempio:
 
 Usa invece warning e salta soltanto la combinazione interessata quando:
 
+- un pathway valido produce un subset vuoto;
 - un pathway o un campione non ha dati positivi;
 - un denominatore è zero;
 - Pathview non ha un ID numerico valido;
-- un manifest storico contiene righe stale;
 - SQMtools segnala una differenza compatibile di versione SqueezeMeta.
 
 Non tutte le modalità rappresentano allo stesso modo i casi vuoti: FUNZ e la
@@ -551,12 +563,13 @@ umana.
 | `pie_pathway_selection_modes()` | Applica la regola speciale: PIE usa solo `defined` salvo richiesta esplicita. |
 | `validate_positive_integer()`, `parse_positive_integer_arg()` | Impediscono che valori frazionari o overflow diventino interi validi per coercizione. |
 | `parse_dimensions()`, `format_dimension_label()` | Interpretano e rendono stabili le dimensioni dei grafici. |
-| `main()` | Coordina l'intero programma: valida, carica, crea contesti, seleziona pathway, chiama le modalità e chiude i manifest. |
+| `main()`, `main_impl()` | Aprono il contesto di corsa, catturano errori/warning e coordinano analisi e manifest. |
 
 ### Nomi, path e scrittura degli artefatti
 
 | Funzioni | Responsabilità in linguaggio naturale |
 |---|---|
+| `generate_run_id()`, `allocate_run_id()`, `add_run_id_to_path()` | Creano l'identità univoca della corsa e la inseriscono nei nomi dei file. |
 | `sanitize_name()`, `pathway_selection_directory()`, `relative_to_output()` | Trasformano etichette in nomi filesystem e mantengono portabili i riferimenti nei manifest. |
 | `progress_message()`, `write_tsv_safe()` | Rendono visibile l'avanzamento e scrivono TSV creando solo le directory necessarie. |
 | `stable_path_token()`, `portable_png_output_path()` | Calcolano un nome PNG corto, leggibile e deterministico quando Windows è vicino al limite. |
@@ -579,13 +592,13 @@ umana.
 | Funzioni | Responsabilità in linguaggio naturale |
 |---|---|
 | `normalize_sqm_project_dir()`, `load_sqm_project()`, `validate_sqm_object()` | Normalizzano la root, caricano SQM una volta e ne controllano la struttura minima. |
-| `validate_samples()`, `validate_taxonomy_ranks()` | Impediscono richieste di campioni o ranghi assenti. |
+| `validate_samples()`, `resolve_sample_selection()`, `validate_taxonomy_ranks()` | Validano campioni/ranghi e conservano ordine CLI o SQM con provenienza esplicita. |
 | `resolve_taxa_filters()`, `subset_sqm_by_taxon()` | Risolvono un nome tassonomico sugli ORF e costruiscono un subset con gli stessi ID esatti, senza rescaling. |
 | `resolve_pathways()`, `pathway_id_for_name()` | Traducono codice o nome richiesto in nome canonico e, se disponibile, ID KEGG. |
 | `parse_kegg_pathway_entries()`, `split_kegg_pathway_field()`, `parse_kegg_pathway_membership()` | Interpretano la gerarchia `KEGGPATH`, separano le foglie PATHWAY valide e costruiscono le appartenenze ORF-pathway. |
 | `select_top_pathways()` | Somma i TPM deduplicati e crea la graduatoria pathway-only del contesto. |
 | `select_context_pathway_groups()`, `select_pathway_groups()` | Tengono separati i gruppi `defined` e `top20`; la seconda è una scorciatoia per il contesto globale. |
-| `subset_pathway()` | Costruisce l'oggetto SQM relativo a un solo nome canonico. |
+| `subset_pathway()`, `prepare_context_pathway_subsets()` | Costruiscono i subset con `allow_empty=TRUE` e isolano le combinazioni vuote. |
 | `pathview_is_exportable()` | Decide se esiste un ID numerico sicuro da passare a Pathview. |
 
 ### Tabella ORF-KO e metadati
@@ -618,10 +631,10 @@ umana.
 |---|---|
 | `run_funz_mode()`, `run_enzyme_mode()`, `run_flow_mode()`, `run_taxonomy_scope()`, `run_pathview_mode()`, `run_pie_mode()` | Eseguono i loop specifici di ogni modalità, scrivono gli artefatti e accumulano le relative righe manifest. |
 | `normalize_manifest_ko_audit()`, `new_manifest_row()` | Mantengono uno schema manifest comune e aggiungono la provenienza KO quando pertinente. |
-| `normalize_legacy_pie_manifest()`, `read_section_manifest()` | Leggono manifest precedenti e riallineano i vecchi path PIE alla struttura attuale. |
-| `manifest_target_status()`, `validate_current_manifest_targets()`, `prune_stale_manifest_targets()` | Classificano i target e applicano la diversa policy per righe nuove e storiche. |
-| `merge_section_manifest()` | Unisce nuove e vecchie righe dando precedenza ai nuovi output e tollerando manifest legacy malformati. |
-| `section_manifest_paths()`, `write_section_manifest()`, `write_combined_manifest()` | Scrivono, riconciliano e indicizzano i manifest di tutte le sezioni. |
+| `manifest_target_status()`, `validate_current_manifest_targets()` | Verificano che ogni target corrente sia relativo, interno, esistente e non vuoto. |
+| `write_section_manifest()`, `write_combined_manifest()` | Scrivono e indicizzano esclusivamente i manifest della corsa corrente. |
+| `write_run_manifest()`, `write_failed_run_manifests()` | Registrano esito, warning, skip e artefatti parziali senza cancellarli. |
+| `normalize_legacy_pie_manifest()`, `read_section_manifest()`, `prune_stale_manifest_targets()`, `merge_section_manifest()` | Restano utility di compatibilità per leggere o migrare inventari legacy; non sono usate per costruire i manifest correnti. |
 
 ## Esempio ragionato
 
@@ -641,7 +654,8 @@ sequenza umana è questa:
     espanso di quel campione;
 11. scrivere il TSV, poi PNG e/o HTML;
 12. registrare soltanto i file esistenti nel manifest FLOW;
-13. riconciliare tutti i manifest e rigenerare `manifest_all.tsv`.
+13. indicizzare soltanto i manifest correnti in `manifest_all__<run_id>.tsv` e
+    chiudere `manifest_run__<run_id>.tsv`.
 
 ## Cosa lo script non fa
 

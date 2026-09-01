@@ -83,7 +83,7 @@ run_case("raw positive-integer parser accepts only canonical decimal digits", {
   }
 })
 
-run_case("invalid integer CLI values fail before output creation and SQM loading", {
+run_case("invalid integer CLI values fail before SQM loading and write a failed-run manifest", {
   test_root <- tempfile("p2_cli_integer_")
   project_dir <- file.path(test_root, "synthetic_project")
   dir.create(project_dir, recursive = TRUE)
@@ -101,7 +101,7 @@ run_case("invalid integer CLI values fail before output creation and SQM loading
     pathway_top_n = "3.1"
   )
   for (option_name in names(invalid_options)) {
-    output_dir <- file.path(test_root, paste0("must_not_exist_", option_name))
+    output_dir <- file.path(test_root, paste0("failed_run_", option_name))
     cli_output <- suppressWarnings(system2(
       rscript,
       args = c(
@@ -124,8 +124,8 @@ run_case("invalid integer CLI values fail before output creation and SQM loading
       paste0("Invalid --", option_name, " unexpectedly exited successfully")
     )
     expect_true(
-      !dir.exists(output_dir),
-      paste0("Invalid --", option_name, " created output_dir before failing")
+      dir.exists(output_dir),
+      paste0("Invalid --", option_name, " did not initialize its failed-run output")
     )
     expect_true(
       !any(grepl("Loading SQM project", cli_output, fixed = TRUE)),
@@ -134,6 +134,30 @@ run_case("invalid integer CLI values fail before output creation and SQM loading
     expect_true(
       any(grepl(option_name, cli_output, fixed = TRUE)),
       paste0("Invalid --", option_name, " error did not identify the option")
+    )
+    run_manifests <- list.files(
+      output_dir,
+      pattern = "^manifest_run__.*\\.tsv$",
+      full.names = TRUE
+    )
+    failure_manifests <- list.files(
+      output_dir,
+      pattern = "^manifest_failed_artifacts__.*\\.tsv$",
+      full.names = TRUE
+    )
+    expect_true(
+      length(run_manifests) == 1L && length(failure_manifests) == 1L,
+      paste0("Invalid --", option_name, " did not write isolated failure manifests")
+    )
+    run_metadata <- readr::read_tsv(
+      run_manifests[[1L]],
+      show_col_types = FALSE,
+      na = "NA"
+    )
+    expect_true(
+      identical(run_metadata$status, "failed") &&
+        grepl(option_name, run_metadata$error_message, fixed = TRUE),
+      paste0("Invalid --", option_name, " wrote incorrect failure metadata")
     )
   }
 })

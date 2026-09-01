@@ -66,7 +66,10 @@ bootstrap_cli_value <- function(args, option_name) {
   }
   separate_match <- which(args == paste0("--", option_name))
   if (length(separate_match) > 0L && separate_match[[1L]] < length(args)) {
-    return(args[[separate_match[[1L]] + 1L]])
+    candidate <- args[[separate_match[[1L]] + 1L]]
+    if (!startsWith(candidate, "--")) {
+      return(candidate)
+    }
   }
   NULL
 }
@@ -76,7 +79,7 @@ bootstrap_args <- commandArgs(trailingOnly = TRUE)
 bootstrap_help <- direct_cli_execution &&
   (length(bootstrap_args) == 0L || any(bootstrap_args %in% c("--help", "-h")))
 
-if (!bootstrap_help) {
+if (!bootstrap_help && !direct_cli_execution) {
   bootstrap_mode <- if (direct_cli_execution) bootstrap_cli_value(bootstrap_args, "mode") else NULL
   if (is.null(bootstrap_mode) || !nzchar(bootstrap_mode)) {
     bootstrap_mode <- if (direct_cli_execution) "unspecified" else "source"
@@ -448,9 +451,197 @@ relative_to_output <- function(path, output_dir) {
 
 # ---- Output and manifest helpers -----------------------------------------
 
-write_tsv_safe <- function(data, path) {
+.sqm_run_context <- new.env(parent = emptyenv())
+
+clear_run_context <- function() {
+  context_fields <- ls(envir = .sqm_run_context, all.names = TRUE)
+  if (length(context_fields) > 0L) {
+    rm(list = context_fields, envir = .sqm_run_context)
+  }
+  invisible(TRUE)
+}
+
+validate_run_id <- function(run_id) {
+  run_id <- as.character(run_id)
+  pattern <- "^[0-9]{8}T[0-9]{6}_UTC[pm][0-9]{4}_[0-9a-f]{4}$"
+  if (length(run_id) != 1L || is.na(run_id) || !grepl(pattern, run_id)) {
+    stop("Invalid run_id: ", paste(run_id, collapse = ","), call. = FALSE)
+  }
+  run_id
+}
+
+generate_collision_suffix <- function() {
+  paste0(sample(c(0:9, letters[1:6]), 4L, replace = TRUE), collapse = "")
+}
+
+generate_run_id <- function(
+    now = Sys.time(),
+    utc_offset = format(now, "%z"),
+    collision_suffix = generate_collision_suffix()) {
+  utc_offset <- as.character(utc_offset)
+  collision_suffix <- tolower(as.character(collision_suffix))
+  if (length(utc_offset) != 1L || !grepl("^[+-][0-9]{4}$", utc_offset)) {
+    stop("UTC offset must use +HHMM or -HHMM format.", call. = FALSE)
+  }
+  if (length(collision_suffix) != 1L || !grepl("^[0-9a-f]{4}$", collision_suffix)) {
+    stop("Run collision suffix must contain four hexadecimal characters.", call. = FALSE)
+  }
+  offset_label <- paste0(
+    "UTC",
+    if (startsWith(utc_offset, "+")) "p" else "m",
+    substring(utc_offset, 2L)
+  )
+  validate_run_id(paste0(
+    format(now, "%Y%m%dT%H%M%S"),
+    "_", offset_label, "_", collision_suffix
+  ))
+}
+
+run_id_exists <- function(output_dir, run_id) {
+  if (!dir.exists(output_dir)) {
+    return(FALSE)
+  }
+  existing_files <- list.files(
+    output_dir,
+    recursive = TRUE,
+    full.names = FALSE,
+    all.files = TRUE,
+    include.dirs = FALSE
+  )
+  any(grepl(paste0("__", validate_run_id(run_id)), basename(existing_files), fixed = TRUE))
+}
+
+allocate_run_id <- function(
+    output_dir,
+    now = Sys.time(),
+    suffix_fn = generate_collision_suffix,
+    max_attempts = 1024L) {
+  for (attempt in seq_len(max_attempts)) {
+    candidate <- generate_run_id(
+      now = now,
+      utc_offset = format(now, "%z"),
+      collision_suffix = suffix_fn()
+    )
+    if (!run_id_exists(output_dir, candidate)) {
+      return(candidate)
+    }
+  }
+  stop("Unable to allocate a unique run_id in output_dir.", call. = FALSE)
+}
+
+set_run_context <- function(
+    run_id,
+    started_at = Sys.time(),
+    sample_order_basis = NA_character_,
+    samples = character(),
+    cli_args = character()) {
+  clear_run_context()
+  .sqm_run_context$run_id <- validate_run_id(run_id)
+  .sqm_run_context$started_at <- started_at
+  .sqm_run_context$sample_order_basis <- as.character(sample_order_basis)
+  .sqm_run_context$samples <- as.character(samples)
+  .sqm_run_context$cli_args <- as.character(cli_args)
+  .sqm_run_context$warnings <- character()
+  .sqm_run_context$pathway_skips <- data.frame(
+    context = character(),
+    pathway = character(),
+    reason = character(),
+    stringsAsFactors = FALSE
+  )
+  invisible(.sqm_run_context$run_id)
+}
+
+current_run_id <- function(required = FALSE) {
+  run_id <- .sqm_run_context$run_id
+  if (is.null(run_id)) {
+    if (isTRUE(required)) {
+      stop("No analytical run context is active.", call. = FALSE)
+    }
+    return(NA_character_)
+  }
+  run_id
+}
+
+current_sample_order_basis <- function() {
+  basis <- .sqm_run_context$sample_order_basis
+  if (is.null(basis) || length(basis) != 1L) NA_character_ else basis
+}
+
+update_run_sample_order <- function(samples, sample_order_basis) {
+  if (!is.na(current_run_id())) {
+    .sqm_run_context$samples <- as.character(samples)
+    .sqm_run_context$sample_order_basis <- as.character(sample_order_basis)
+  }
+  invisible(samples)
+}
+
+record_run_warning <- function(message) {
+  if (!is.na(current_run_id())) {
+    .sqm_run_context$warnings <- unique(c(
+      .sqm_run_context$warnings,
+      as.character(message)
+    ))
+  }
+  invisible(message)
+}
+
+record_pathway_skips <- function(skips) {
+  if (nrow(skips) == 0L || is.na(current_run_id())) {
+    return(invisible(skips))
+  }
+  required_columns <- c("context", "pathway", "reason")
+  if (!all(required_columns %in% colnames(skips))) {
+    stop("Pathway skip audit is missing required columns.", call. = FALSE)
+  }
+  .sqm_run_context$pathway_skips <- unique(rbind(
+    .sqm_run_context$pathway_skips,
+    as.data.frame(skips[required_columns], stringsAsFactors = FALSE)
+  ))
+  invisible(skips)
+}
+
+add_run_id_to_path <- function(path, run_id) {
+  run_id <- validate_run_id(run_id)
+  extension <- tools::file_ext(path)
+  stem <- if (nzchar(extension)) tools::file_path_sans_ext(path) else path
+  suffix <- paste0("__", run_id)
+  if (endsWith(stem, suffix)) {
+    return(path)
+  }
+  if (nzchar(extension)) {
+    paste0(stem, suffix, ".", extension)
+  } else {
+    paste0(stem, suffix)
+  }
+}
+
+run_artifact_path <- function(path) {
+  run_id <- current_run_id()
+  if (is.na(run_id)) path else add_run_id_to_path(path, run_id)
+}
+
+write_tsv_safe <- function(
+    data,
+    path,
+    readr_available = requireNamespace("readr", quietly = TRUE)) {
+  path <- run_artifact_path(path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  readr::write_tsv(data, path, na = "NA")
+  if (isTRUE(readr_available)) {
+    readr::write_tsv(data, path, na = "NA")
+  } else {
+    utils::write.table(
+      as.data.frame(data, stringsAsFactors = FALSE),
+      file = path,
+      sep = "\t",
+      quote = TRUE,
+      qmethod = "double",
+      row.names = FALSE,
+      col.names = TRUE,
+      na = "NA",
+      fileEncoding = "UTF-8"
+    )
+  }
+  path
 }
 
 progress_message <- function(..., .prefix = "[sqm_plots]") {
@@ -547,12 +738,19 @@ save_png_dimensions <- function(
   output_files <- character()
   for (dim_name in names(dimensions)) {
     dims <- dimensions[[dim_name]]
+    active_run_id <- current_run_id()
+    run_suffix_length <- if (is.na(active_run_id)) 0L else nchar(active_run_id) + 2L
+    effective_max_path_length <- max_path_length - run_suffix_length
+    if (effective_max_path_length <= 0L) {
+      stop("run_id leaves no room for a portable PNG filename.", call. = FALSE)
+    }
     output_file <- portable_png_output_path(
       output_dir,
       file_stem,
       dim_name,
-      max_path_length = max_path_length
+      max_path_length = effective_max_path_length
     )
+    output_file <- run_artifact_path(output_file)
     ggplot2::ggsave(
       filename = output_file,
       plot = plot_object,
@@ -569,6 +767,7 @@ save_png_dimensions <- function(
 }
 
 save_html_widget <- function(widget, path) {
+  path <- run_artifact_path(path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   dependency_dir <- paste0(tools::file_path_sans_ext(path), "_files")
   if (dir.exists(dependency_dir)) {
@@ -661,7 +860,11 @@ new_manifest_row <- function(
     sample_order_basis = NA_character_,
     ko_audit = NULL) {
   ko_audit_values <- normalize_manifest_ko_audit(ko_audit)
+  if (length(sample_order_basis) != 1L || is.na(sample_order_basis)) {
+    sample_order_basis <- current_sample_order_basis()
+  }
   tibble::tibble(
+    run_id = current_run_id(),
     script = script_name,
     project_dir = project_dir,
     tax_mode = tax_mode,
@@ -1254,6 +1457,9 @@ validate_sqm_tpm_inputs <- function(
 }
 
 validate_samples <- function(requested_samples, available_samples) {
+  if (anyDuplicated(requested_samples) > 0L) {
+    stop("Samples must be unique and retain one explicit display position each.", call. = FALSE)
+  }
   missing_samples <- setdiff(requested_samples, available_samples)
   if (length(missing_samples) > 0L) {
     stop(
@@ -1262,6 +1468,22 @@ validate_samples <- function(requested_samples, available_samples) {
       call. = FALSE
     )
   }
+}
+
+resolve_sample_selection <- function(samples_argument, available_samples) {
+  selected_samples <- if (is.null(samples_argument)) {
+    as.character(available_samples)
+  } else {
+    split_csv_arg(samples_argument)
+  }
+  if (length(selected_samples) == 0L) {
+    stop("samples cannot be empty.", call. = FALSE)
+  }
+  validate_samples(selected_samples, available_samples)
+  list(
+    samples = selected_samples,
+    basis = if (is.null(samples_argument)) "sqm_column_order" else "cli"
+  )
 }
 
 validate_taxonomy_ranks <- function(requested_ranks, available_ranks) {
@@ -1274,14 +1496,87 @@ validate_taxonomy_ranks <- function(requested_ranks, available_ranks) {
   }
 }
 
-subset_pathway <- function(sqm, canonical_pathway) {
-  SQMtools::subsetFun(
+subset_pathway <- function(
+    sqm,
+    canonical_pathway,
+    subset_fun = SQMtools::subsetFun) {
+  subset_fun(
     SQM = sqm,
     fun = canonical_pathway,
     columns = "KEGGPATH",
     ignore_case = FALSE,
-    fixed = TRUE
+    fixed = TRUE,
+    allow_empty = TRUE
   )
+}
+
+is_empty_pathway_subset <- function(pathway_sqm) {
+  if (is.null(pathway_sqm)) {
+    return(TRUE)
+  }
+  if (is.null(pathway_sqm$orfs)) {
+    return(TRUE)
+  }
+  orf_table <- pathway_sqm$orfs$table
+  orf_tpm <- pathway_sqm$orfs$tpm
+  if (is.null(orf_table) && is.null(orf_tpm)) {
+    return(TRUE)
+  }
+  if (is.null(orf_table) || is.null(orf_tpm)) {
+    stop("Pathway subset is missing ORF table or TPM data.", call. = FALSE)
+  }
+  nrow(as.data.frame(orf_table, check.names = FALSE)) == 0L ||
+    nrow(as.data.frame(orf_tpm, check.names = FALSE)) == 0L
+}
+
+prepare_context_pathway_subsets <- function(
+    context_sqm,
+    pathway_entries,
+    context_label,
+    subset_fun = SQMtools::subsetFun) {
+  pathway_sqms <- list()
+  skips <- tibble::tibble(
+    context = character(),
+    pathway = character(),
+    reason = character()
+  )
+
+  for (pathway_info in pathway_entries) {
+    pathway_sqm <- subset_pathway(
+      context_sqm,
+      pathway_info$pathway_name,
+      subset_fun = subset_fun
+    )
+    if (is_empty_pathway_subset(pathway_sqm)) {
+      warning(
+        "Skipping empty context x pathway combination: context=", context_label,
+        " | pathway=", pathway_info$pathway_name,
+        call. = FALSE
+      )
+      skips <- bind_rows(
+        skips,
+        tibble::tibble(
+          context = as.character(context_label),
+          pathway = pathway_info$pathway_name,
+          reason = "empty_subset"
+        )
+      )
+      next
+    }
+    pathway_key <- paste(
+      pathway_info$pathway_selection,
+      pathway_info$pathway_name,
+      sep = "::"
+    )
+    pathway_sqms[[pathway_key]] <- list(
+      pathway_name = pathway_info$pathway_name,
+      pathway_id = pathway_info$pathway_id,
+      pathway_selection = pathway_info$pathway_selection,
+      pathway_sqm = pathway_sqm
+    )
+  }
+
+  list(pathway_sqms = pathway_sqms, skips = skips)
 }
 
 resolve_taxa_filters <- function(sqm, requested_taxa) {
@@ -1344,7 +1639,7 @@ subset_sqm_by_taxon <- function(
     orfs = orf_ids,
     tax_source = "orfs",
     trusted_functions_only = FALSE,
-    ignore_unclassified_functions = TRUE,
+    ignore_unclassified_functions = FALSE,
     rescale_tpm = FALSE,
     rescale_copy_number = FALSE,
     recalculate_bin_stats = FALSE,
@@ -2838,7 +3133,7 @@ run_funz_mode <- function(
   )
   plot_path <- file.path(pathway_dir, "barplot_ko_data.tsv")
   progress_message("FUNZ | writing data: ", plot_path)
-  write_tsv_safe(plot_tbl, plot_path)
+  plot_path <- write_tsv_safe(plot_tbl, plot_path)
 
   output_manifests$funz <- bind_rows(
     output_manifests$funz,
@@ -2923,6 +3218,7 @@ run_enzyme_mode <- function(
     top_n_ko,
     enzyme_ecs = default_enzyme_ecs,
     enzyme_plot_types = default_enzyme_plot_types,
+    sample_order_basis = current_sample_order_basis(),
     filtered_taxon = NA_character_,
     filtered_taxon_rank = NA_character_) {
   enzyme_ecs <- normalize_enzyme_ecs(enzyme_ecs)
@@ -2969,7 +3265,7 @@ run_enzyme_mode <- function(
         filtered_taxon_rank = filtered_taxon_rank,
         ko_selection_policy = "not_applicable",
         source_data_file = source_data_file,
-        sample_order_basis = "selected_samples_order"
+        sample_order_basis = sample_order_basis
       )
     )
   }
@@ -2977,7 +3273,7 @@ run_enzyme_mode <- function(
   combined_dir <- file.path(enzyme_root, "insieme")
   dir.create(combined_dir, recursive = TRUE, showWarnings = FALSE)
   combined_data_file <- file.path(combined_dir, "enzimi_data.tsv")
-  write_tsv_safe(enzyme_tbl, combined_data_file)
+  combined_data_file <- write_tsv_safe(enzyme_tbl, combined_data_file)
   output_manifests$funz <- append_manifest_entry(
     output_manifests$funz,
     combined_data_file,
@@ -3043,7 +3339,7 @@ run_enzyme_mode <- function(
       filter(as.character(.data$ec_code) == current_ec_code) |>
       mutate(ec_code = factor(as.character(.data$ec_code), levels = current_ec_code))
     ec_data_file <- file.path(ec_dir, "enzima_data.tsv")
-    write_tsv_safe(ec_tbl, ec_data_file)
+    ec_data_file <- write_tsv_safe(ec_tbl, ec_data_file)
     output_manifests$funz <- append_manifest_entry(
       output_manifests$funz,
       ec_data_file,
@@ -3181,7 +3477,7 @@ run_flow_mode <- function(
         paste0("flowplot_", rank, "_", sample_component, "_data.tsv")
       )
       progress_message("FLOW | writing data: ", data_file)
-      write_tsv_safe(flow_tbl, data_file)
+      data_file <- write_tsv_safe(flow_tbl, data_file)
       output_manifests$flow <- bind_rows(
         output_manifests$flow,
         new_manifest_row(
@@ -3256,7 +3552,7 @@ run_flow_mode <- function(
         )
         progress_message("FLOW | saving HTML | pathway=", pathway_name, " | rank=", rank, " | sample=", sample_name)
         widget <- make_flow_sankey(flow_tbl, pathway_name, rank, sample_name)
-        save_html_widget(widget, html_file)
+        html_file <- save_html_widget(widget, html_file)
         output_manifests$flow <- bind_rows(
           output_manifests$flow,
           new_manifest_row(
@@ -3389,7 +3685,7 @@ run_taxonomy_scope <- function(
       file_stem <- taxonomy_file_stem(scope_name, count, rank, pathway_name)
       data_file <- file.path(rank_dir, paste0(file_stem, "_data.tsv"))
       progress_message("TAXON | writing data: ", data_file)
-      write_tsv_safe(plot_data, data_file)
+      data_file <- write_tsv_safe(plot_data, data_file)
 
       output_manifests$taxon <- bind_rows(
         output_manifests$taxon,
@@ -3523,6 +3819,7 @@ export_pathview_isolated <- function(
     count = "tpm",
     samples = selected_samples,
     split_samples = FALSE,
+    log_scale = FALSE,
     output_dir = temporary_dir_abs,
     output_suffix = paste0("pathview_", pathway_id)
   )
@@ -3540,7 +3837,11 @@ export_pathview_isolated <- function(
 
   dir.create(final_dir, recursive = TRUE, showWarnings = FALSE)
   relative_files <- substring(produced_files, nchar(temporary_dir_abs) + 2L)
-  final_files <- file.path(final_dir, relative_files)
+  final_files <- vapply(
+    file.path(final_dir, relative_files),
+    run_artifact_path,
+    character(1)
+  )
   for (file_index in seq_along(produced_files)) {
     dir.create(dirname(final_files[[file_index]]), recursive = TRUE, showWarnings = FALSE)
     copied <- file.copy(
@@ -3597,7 +3898,8 @@ run_pathview_mode <- function(
       output_type,
       output_file,
       output_scope,
-      source_data_file = NA_character_) {
+      source_data_file = NA_character_,
+      ko_selection_policy = "pathview_native_mapping") {
     bind_rows(
       manifest,
       new_manifest_row(
@@ -3617,7 +3919,7 @@ run_pathview_mode <- function(
         output_scope = output_scope,
         filtered_taxon = filtered_taxon,
         filtered_taxon_rank = filtered_taxon_rank,
-        ko_selection_policy = "all_pathway_mapped_ko",
+        ko_selection_policy = ko_selection_policy,
         source_data_file = source_data_file
       )
     )
@@ -3647,20 +3949,22 @@ run_pathview_mode <- function(
       )
 
       input_table <- build_pathview_input_table(sqm_object, current_samples)
-      input_file <- file.path(pathview_dir, "pathview_input_tpm.tsv")
+      input_file <- file.path(pathview_dir, "pathview_input_all_ko_complete_matrix.tsv")
       config_file <- file.path(pathview_dir, "pathview_render_config.tsv")
-      write_tsv_safe(input_table, input_file)
-      write_tsv_safe(
+      input_file <- write_tsv_safe(input_table, input_file)
+      config_file <- write_tsv_safe(
         tibble::tibble(
           pathway_id = pathway_id,
           metric = "tpm",
           samples = paste(current_samples, collapse = ","),
           pathview_sample_mode = pathview_sample_mode,
           split_samples = FALSE,
-          log_scale = TRUE,
-          pseudocount = 0.001,
+          log_scale = FALSE,
+          pseudocount = NA_real_,
           color_bins = 10L,
-          max_scale_value = "automatic"
+          max_scale_value = "automatic",
+          color_source = "pathview_native",
+          input_scope = "complete_all_ko_matrix"
         ),
         config_file
       )
@@ -3668,9 +3972,10 @@ run_pathview_mode <- function(
       output_manifests$pathview <- append_pathview_row(
         output_manifests$pathview,
         current_samples,
-        "pathview_input_tsv",
+        "pathview_input_all_ko_complete_matrix_tsv",
         input_file,
-        output_scope
+        output_scope,
+        ko_selection_policy = "all_ko_complete_matrix"
       )
       output_manifests$pathview <- append_pathview_row(
         output_manifests$pathview,
@@ -3678,7 +3983,8 @@ run_pathview_mode <- function(
         "pathview_render_config_tsv",
         config_file,
         output_scope,
-        source_data_file = input_relative
+        source_data_file = input_relative,
+        ko_selection_policy = "all_ko_complete_matrix"
       )
 
       progress_message(
@@ -3805,7 +4111,7 @@ run_pie_mode <- function(
         )
         data_file <- file.path(ko_dir, paste0(data_file_stem, "_data.tsv"))
         progress_message("PIE | writing data: ", data_file)
-        write_tsv_safe(plot_data, data_file)
+        data_file <- write_tsv_safe(plot_data, data_file)
 
         output_manifests$pie <- bind_rows(
           output_manifests$pie,
@@ -4041,66 +4347,44 @@ merge_section_manifest <- function(new_manifest_tbl, existing_manifest_tbl) {
     distinct(.data$output_file, .keep_all = TRUE)
 }
 
-section_manifest_paths <- function(output_dir) {
-  paths <- c(
-    flow = file.path(output_dir, "flowplot", "manifest_flow.tsv"),
-    funz = file.path(output_dir, "funz", "manifest_funz.tsv"),
-    taxon = file.path(output_dir, "manifest_taxon.tsv"),
-    pathview = file.path(output_dir, "pathview", "manifest_pathview.tsv"),
-    pie = file.path(output_dir, "pie", "manifest_pie.tsv")
-  )
-  paths[file.exists(paths)]
-}
-
 write_section_manifest <- function(manifest_tbl, output_dir, relative_dir, filename) {
   validate_current_manifest_targets(manifest_tbl, output_dir)
   dir_path <- file.path(output_dir, relative_dir)
   dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
   manifest_path <- file.path(dir_path, filename)
-  existing_manifest_tbl <- read_section_manifest(manifest_path, relative_dir)
-  existing_manifest_tbl <- prune_stale_manifest_targets(
-    existing_manifest_tbl,
-    output_dir,
-    gsub("^manifest_|\\.tsv$", "", filename)
-  )
-  merged_manifest_tbl <- merge_section_manifest(manifest_tbl, existing_manifest_tbl)
-  write_tsv_safe(merged_manifest_tbl, manifest_path)
-  manifest_path
+  write_tsv_safe(manifest_tbl, manifest_path)
 }
 
-write_combined_manifest <- function(output_dir) {
-  definitions <- list(
-    flow = list(relative_dir = "flowplot", filename = "manifest_flow.tsv"),
-    funz = list(relative_dir = "funz", filename = "manifest_funz.tsv"),
-    taxon = list(relative_dir = "", filename = "manifest_taxon.tsv"),
-    pathview = list(relative_dir = "pathview", filename = "manifest_pathview.tsv"),
-    pie = list(relative_dir = "pie", filename = "manifest_pie.tsv")
-  )
-
-  valid_manifests <- character()
-  for (section in names(definitions)) {
-    definition <- definitions[[section]]
-    manifest_path <- file.path(output_dir, definition$relative_dir, definition$filename)
-    if (!file.exists(manifest_path)) {
-      next
+write_combined_manifest <- function(
+    output_dir,
+    section_manifest_paths = character()) {
+  section_names <- names(section_manifest_paths)
+  if (is.null(section_names)) {
+    section_names <- character()
+  }
+  if (length(section_manifest_paths) > 0L) {
+    if (any(!nzchar(section_names))) {
+      stop("section_manifest_paths must be named by section.", call. = FALSE)
     }
-
-    reconciled_path <- write_section_manifest(
-      tibble::tibble(),
-      output_dir,
-      definition$relative_dir,
-      definition$filename
+    valid_manifest <- vapply(
+      section_manifest_paths,
+      function(path) file.exists(path) && !dir.exists(path) && file.info(path)$size > 0,
+      logical(1)
     )
-    reconciled <- read_section_manifest(reconciled_path, definition$relative_dir)
-    if (nrow(reconciled) > 0L) {
-      valid_manifests[[section]] <- reconciled_path
+    if (!all(valid_manifest)) {
+      stop(
+        "Combined manifest received missing or empty section manifests: ",
+        paste(names(section_manifest_paths)[!valid_manifest], collapse = ", "),
+        call. = FALSE
+      )
     }
   }
 
   manifest_all <- tibble::tibble(
-    section = names(valid_manifests),
+    run_id = rep(current_run_id(), length(section_manifest_paths)),
+    section = section_names,
     manifest_file = vapply(
-      valid_manifests,
+      section_manifest_paths,
       relative_to_output,
       character(1),
       output_dir = output_dir
@@ -4108,13 +4392,164 @@ write_combined_manifest <- function(output_dir) {
   )
   manifest_all_path <- file.path(output_dir, "manifest_all.tsv")
   write_tsv_safe(manifest_all, manifest_all_path)
-  manifest_all_path
+}
+
+format_run_time <- function(value) {
+  if (length(value) != 1L || is.na(value)) {
+    return(NA_character_)
+  }
+  format(value, "%Y-%m-%dT%H:%M:%S%z")
+}
+
+serialize_pathway_skips <- function(skips) {
+  if (is.null(skips) || nrow(skips) == 0L) {
+    return(NA_character_)
+  }
+  paste(
+    paste0(
+      "context=", skips$context,
+      ";pathway=", skips$pathway,
+      ";reason=", skips$reason
+    ),
+    collapse = " | "
+  )
+}
+
+list_run_artifacts <- function(output_dir, run_id = current_run_id(required = TRUE)) {
+  if (!dir.exists(output_dir)) {
+    return(data.frame(
+      run_id = character(),
+      output_file = character(),
+      size_bytes = numeric(),
+      modified_at = character(),
+      stringsAsFactors = FALSE
+    ))
+  }
+  paths <- list.files(
+    output_dir,
+    recursive = TRUE,
+    full.names = TRUE,
+    all.files = TRUE,
+    include.dirs = FALSE
+  )
+  paths <- paths[grepl(paste0("__", run_id), basename(paths), fixed = TRUE)]
+  if (length(paths) == 0L) {
+    return(data.frame(
+      run_id = character(),
+      output_file = character(),
+      size_bytes = numeric(),
+      modified_at = character(),
+      stringsAsFactors = FALSE
+    ))
+  }
+  info <- file.info(paths)
+  keep <- !info$isdir & !is.na(info$size) & info$size > 0
+  paths <- paths[keep]
+  info <- info[keep, , drop = FALSE]
+  artifacts <- data.frame(
+    run_id = rep(run_id, length(paths)),
+    output_file = vapply(paths, relative_to_output, character(1), output_dir = output_dir),
+    size_bytes = as.numeric(info$size),
+    modified_at = format(info$mtime, "%Y-%m-%dT%H:%M:%S%z"),
+    stringsAsFactors = FALSE
+  )
+  artifacts[order(artifacts$output_file), , drop = FALSE]
+}
+
+write_run_manifest <- function(
+    output_dir,
+    project_dir,
+    mode,
+    tax_mode,
+    status,
+    error_message = NA_character_,
+    artifact_manifest = NA_character_,
+    combined_manifest = NA_character_) {
+  run_id <- current_run_id(required = TRUE)
+  warnings <- .sqm_run_context$warnings
+  if (is.null(warnings)) warnings <- character()
+  skips <- .sqm_run_context$pathway_skips
+  if (is.null(skips)) {
+    skips <- data.frame(
+      context = character(),
+      pathway = character(),
+      reason = character(),
+      stringsAsFactors = FALSE
+    )
+  }
+  relative_manifest <- function(path) {
+    if (length(path) != 1L || is.na(path) || !nzchar(path)) {
+      return(NA_character_)
+    }
+    relative_to_output(path, output_dir)
+  }
+  run_manifest <- data.frame(
+    run_id = run_id,
+    status = status,
+    started_at = format_run_time(.sqm_run_context$started_at),
+    finished_at = format_run_time(Sys.time()),
+    project_dir = as.character(project_dir),
+    output_dir = as.character(output_dir),
+    tax_mode = as.character(tax_mode),
+    mode = as.character(mode),
+    samples = paste(.sqm_run_context$samples, collapse = ","),
+    sample_order_basis = current_sample_order_basis(),
+    cli_arguments = paste(.sqm_run_context$cli_args, collapse = " "),
+    warning_count = length(warnings),
+    warnings = if (length(warnings) == 0L) NA_character_ else paste(warnings, collapse = " | "),
+    skipped_pathway_count = nrow(skips),
+    skipped_pathways = serialize_pathway_skips(skips),
+    error_message = error_message,
+    artifact_manifest = relative_manifest(artifact_manifest),
+    combined_manifest = relative_manifest(combined_manifest),
+    stringsAsFactors = FALSE
+  )
+  write_tsv_safe(run_manifest, file.path(output_dir, "manifest_run.tsv"))
+}
+
+write_failed_run_manifests <- function(
+    output_dir,
+    project_dir,
+    mode,
+    tax_mode,
+    error_message) {
+  partial_artifacts <- list_run_artifacts(output_dir)
+  artifact_manifest <- write_tsv_safe(
+    partial_artifacts,
+    file.path(output_dir, "manifest_failed_artifacts.tsv")
+  )
+  run_manifest <- write_run_manifest(
+    output_dir = output_dir,
+    project_dir = project_dir,
+    mode = mode,
+    tax_mode = tax_mode,
+    status = "failed",
+    error_message = as.character(error_message),
+    artifact_manifest = artifact_manifest
+  )
+  list(artifacts = artifact_manifest, run = run_manifest)
+}
+
+write_success_run_manifest <- function(
+    output_dir,
+    project_dir,
+    mode,
+    tax_mode,
+    combined_manifest) {
+  write_run_manifest(
+    output_dir = output_dir,
+    project_dir = project_dir,
+    mode = mode,
+    tax_mode = tax_mode,
+    status = "success",
+    combined_manifest = combined_manifest
+  )
 }
 
 # ---- Command-line entry point ---------------------------------------------
 
 # Validate inputs before loading SQM, then run only the requested analysis modes.
-main <- function() {
+main_impl <- function() {
   progress_message("Starting script")
 
   args <- commandArgs(trailingOnly = TRUE)
@@ -4155,6 +4590,19 @@ main <- function() {
   if (!dir.exists(project_dir)) {
     stop("Project directory does not exist: ", project_dir, call. = FALSE)
   }
+
+  runtime_flow_formats <- if (is.null(named_args$flowplot_formats)) {
+    c("png", "html")
+  } else {
+    trimws(strsplit(named_args$flowplot_formats, ",", fixed = TRUE)[[1L]])
+  }
+  check_required_packages(
+    required_packages_for_mode(mode, runtime_flow_formats),
+    mode
+  )
+  suppressPackageStartupMessages(
+    invisible(lapply(common_required_packages, library, character.only = TRUE))
+  )
 
   tax_mode <- validate_tax_mode(
     if (is.null(named_args$tax_mode)) "prokfilter" else named_args$tax_mode
@@ -4249,11 +4697,10 @@ main <- function() {
   validate_taxonomy_ranks(taxonomy_ranks, colnames(sqm$orfs$tax))
 
   available_samples <- colnames(sqm$orfs$tpm)
-  selected_samples <- if (is.null(named_args$samples)) available_samples else split_csv_arg(named_args$samples)
-  if (length(selected_samples) == 0L) {
-    stop("samples cannot be empty.", call. = FALSE)
-  }
-  validate_samples(selected_samples, available_samples)
+  sample_selection <- resolve_sample_selection(named_args$samples, available_samples)
+  selected_samples <- sample_selection$samples
+  sample_order_basis <- sample_selection$basis
+  update_run_sample_order(selected_samples, sample_order_basis)
   invisible(vapply(selected_samples, safe_output_component, character(1)))
   validate_sqm_tpm_inputs(
     sqm,
@@ -4358,22 +4805,18 @@ main <- function() {
     }) |>
       purrr::flatten()
 
-    pathway_sqms <- map(
-      pathway_entries,
-      function(pathway_info) {
-        list(
-          pathway_name = pathway_info$pathway_name,
-          pathway_id = pathway_info$pathway_id,
-          pathway_selection = pathway_info$pathway_selection,
-          pathway_sqm = subset_pathway(context_sqm, pathway_info$pathway_name)
-        )
-      }
+    context_label <- if (is.na(context$filtered_taxon)) {
+      "global"
+    } else {
+      paste0(context$filtered_taxon, "@", context$filtered_taxon_rank)
+    }
+    prepared_pathways <- prepare_context_pathway_subsets(
+      context_sqm = context_sqm,
+      pathway_entries = pathway_entries,
+      context_label = context_label
     )
-    names(pathway_sqms) <- vapply(
-      pathway_entries,
-      function(pathway_info) paste(pathway_info$pathway_selection, pathway_info$pathway_name, sep = "::"),
-      character(1)
-    )
+    pathway_sqms <- prepared_pathways$pathway_sqms
+    record_pathway_skips(prepared_pathways$skips)
 
     if (mode %in% c("all", "funz")) {
       progress_message("Starting FUNZ section")
@@ -4419,6 +4862,7 @@ main <- function() {
         top_n_ko = top_n_ko,
         enzyme_ecs = enzyme_ecs,
         enzyme_plot_types = enzyme_plot_types,
+        sample_order_basis = sample_order_basis,
         filtered_taxon = context$filtered_taxon,
         filtered_taxon_rank = context$filtered_taxon_rank
       )
@@ -4594,11 +5038,91 @@ main <- function() {
     manifest_paths[["pie"]] <- write_section_manifest(manifests$pie, output_dir, "pie", "manifest_pie.tsv")
   }
 
-  manifest_all_path <- write_combined_manifest(output_dir)
+  manifest_all_path <- write_combined_manifest(
+    output_dir,
+    section_manifest_paths = manifest_paths
+  )
 
   message("Output directory: ", output_dir)
   message("Combined manifest: ", manifest_all_path)
-  invisible(0)
+  invisible(list(status = 0L, manifest_all_path = manifest_all_path))
+}
+
+main <- function() {
+  args <- commandArgs(trailingOnly = TRUE)
+  if (length(args) == 0L || any(args %in% c("--help", "-h"))) {
+    return(main_impl())
+  }
+
+  output_dir <- bootstrap_cli_value(args, "output_dir")
+  if (is.null(output_dir) || !nzchar(output_dir)) {
+    return(main_impl())
+  }
+
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(output_dir)) {
+    stop("Unable to create output directory: ", output_dir, call. = FALSE)
+  }
+  run_id <- allocate_run_id(output_dir)
+  preliminary_sample_arg <- bootstrap_cli_value(args, "samples")
+  sample_basis <- if (is.null(preliminary_sample_arg)) "sqm_column_order" else "cli"
+  preliminary_samples <- if (is.null(preliminary_sample_arg)) {
+    character()
+  } else {
+    values <- trimws(strsplit(preliminary_sample_arg, ",", fixed = TRUE)[[1L]])
+    values[nzchar(values)]
+  }
+  set_run_context(
+    run_id = run_id,
+    started_at = Sys.time(),
+    sample_order_basis = sample_basis,
+    samples = preliminary_samples,
+    cli_args = args
+  )
+  on.exit(clear_run_context(), add = TRUE)
+
+  project_dir <- bootstrap_cli_value(args, "project_dir")
+  if (is.null(project_dir)) project_dir <- NA_character_
+  mode <- bootstrap_cli_value(args, "mode")
+  if (is.null(mode)) mode <- NA_character_
+  tax_mode <- bootstrap_cli_value(args, "tax_mode")
+  if (is.null(tax_mode)) tax_mode <- "prokfilter"
+
+  run_error <- NULL
+  result <- tryCatch(
+    withCallingHandlers(
+      main_impl(),
+      warning = function(condition) {
+        record_run_warning(conditionMessage(condition))
+      }
+    ),
+    error = function(error) {
+      run_error <<- error
+      NULL
+    }
+  )
+
+  if (!is.null(run_error)) {
+    write_failed_run_manifests(
+      output_dir = output_dir,
+      project_dir = project_dir,
+      mode = mode,
+      tax_mode = tax_mode,
+      error_message = conditionMessage(run_error)
+    )
+    stop(run_error)
+  }
+
+  run_manifest <- write_success_run_manifest(
+    output_dir = output_dir,
+    project_dir = project_dir,
+    mode = mode,
+    tax_mode = tax_mode,
+    combined_manifest = result$manifest_all_path
+  )
+  message("Run ID: ", run_id)
+  message("Run manifest: ", run_manifest)
+  invisible(result$status)
 }
 
 main()

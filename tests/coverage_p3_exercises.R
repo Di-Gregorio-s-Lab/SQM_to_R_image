@@ -84,7 +84,7 @@ pathview_sqm <- list(functions = list(KEGG = list(tpm = data.frame(
 build_pathview_input_table(pathview_sqm, c("S1", "S2"))
 try(build_pathview_input_table(list(), "S1"), silent = TRUE)
 fake_pathview_export <- function(
-    SQM, pathway_id, count, samples, split_samples, output_dir, output_suffix) {
+    SQM, pathway_id, count, samples, split_samples, log_scale, output_dir, output_suffix) {
   writeLines("pathview", file.path(output_dir, "map.png"))
 }
 export_pathview_isolated(
@@ -156,8 +156,13 @@ write_tsv_safe(
   ),
   manifest_path
 )
-suppressWarnings(write_section_manifest(valid_row, coverage_root, "", "manifest_taxon.tsv"))
-write_combined_manifest(coverage_root)
+current_manifest_path <- suppressWarnings(
+  write_section_manifest(valid_row, coverage_root, "", "manifest_taxon.tsv")
+)
+write_combined_manifest(
+  coverage_root,
+  section_manifest_paths = c(taxon = current_manifest_path)
+)
 merge_section_manifest(
   tibble::tibble(output_file = "new.tsv", marker = "new"),
   tibble::tibble(output_file = "old.tsv", marker = NA)
@@ -203,3 +208,92 @@ build_pie_chart_table(
   pathway_selection = "defined",
   pathway_sample_tpm = 100
 )
+
+fixed_now <- as.POSIXct("2026-09-01 14:35:27", tz = "UTC")
+run_id <- generate_run_id(fixed_now, "+0200", "a7f3")
+try(generate_run_id(fixed_now, "invalid", "a7f3"), silent = TRUE)
+try(generate_run_id(fixed_now, "+0200", "invalid"), silent = TRUE)
+add_run_id_to_path(file.path(coverage_root, "artifact.tsv"), run_id)
+add_run_id_to_path(file.path(coverage_root, paste0("artifact__", run_id, ".tsv")), run_id)
+add_run_id_to_path(file.path(coverage_root, "artifact"), run_id)
+
+allocation_root <- file.path(coverage_root, "allocation")
+dir.create(allocation_root)
+utc_run_a <- generate_run_id(fixed_now, "+0000", "a7f3")
+writeLines("collision", file.path(allocation_root, paste0("existing__", utc_run_a, ".tsv")))
+suffixes <- c("a7f3", "b8e4")
+suffix_index <- 0L
+allocated <- allocate_run_id(
+  allocation_root,
+  now = fixed_now,
+  suffix_fn = function() {
+    suffix_index <<- suffix_index + 1L
+    suffixes[[suffix_index]]
+  }
+)
+stopifnot(grepl("b8e4$", allocated))
+
+resolve_sample_selection(NULL, c("S2", "S1"))
+resolve_sample_selection("S1,S2", c("S2", "S1"))
+try(resolve_sample_selection("S1,S1", c("S1")), silent = TRUE)
+
+fake_subset <- function(SQM, fun, columns, ignore_case, fixed, allow_empty) {
+  if (identical(fun, "empty")) {
+    return(list(orfs = list(table = data.frame(), tpm = data.frame())))
+  }
+  list(orfs = list(
+    table = data.frame(value = 1, row.names = "orf"),
+    tpm = data.frame(S1 = 1, row.names = "orf")
+  ))
+}
+subset_pathway(list(), "present", subset_fun = fake_subset)
+is_empty_pathway_subset(NULL)
+is_empty_pathway_subset(list())
+try(
+  is_empty_pathway_subset(list(orfs = list(table = data.frame(value = 1)))),
+  silent = TRUE
+)
+suppressWarnings(prepare_context_pathway_subsets(
+  context_sqm = list(),
+  pathway_entries = list(
+    list(pathway_name = "present", pathway_id = "00001", pathway_selection = "defined"),
+    list(pathway_name = "empty", pathway_id = "00002", pathway_selection = "defined")
+  ),
+  context_label = "coverage",
+  subset_fun = fake_subset
+))
+
+try(write_combined_manifest(coverage_root, "unnamed.tsv"), silent = TRUE)
+try(
+  write_combined_manifest(
+    coverage_root,
+    section_manifest_paths = c(missing = file.path(coverage_root, "missing.tsv"))
+  ),
+  silent = TRUE
+)
+
+failure_root <- file.path(coverage_root, "failure")
+dir.create(failure_root)
+set_run_context(
+  run_id,
+  started_at = fixed_now,
+  sample_order_basis = "cli",
+  samples = c("S2", "S1"),
+  cli_args = "--samples=S2,S1"
+)
+partial <- add_run_id_to_path(file.path(failure_root, "partial.tsv"), run_id)
+writeLines("partial", partial)
+record_run_warning("coverage warning")
+record_pathway_skips(tibble::tibble(
+  context = "coverage",
+  pathway = "empty",
+  reason = "empty_subset"
+))
+write_failed_run_manifests(
+  output_dir = failure_root,
+  project_dir = "project",
+  mode = "all",
+  tax_mode = "prokfilter",
+  error_message = "coverage failure"
+)
+clear_run_context()

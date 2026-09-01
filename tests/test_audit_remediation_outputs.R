@@ -92,10 +92,11 @@ run_case("Pathview isolates each export and manifests exact source data", {
 
   calls <- list()
   fake_export <- function(
-      SQM, pathway_id, count, samples, split_samples, output_dir, output_suffix) {
+      SQM, pathway_id, count, samples, split_samples, log_scale, output_dir, output_suffix) {
     calls[[length(calls) + 1L]] <<- list(
       samples = samples,
       split_samples = split_samples,
+      log_scale = log_scale,
       output_dir = output_dir
     )
     writeLines("current", file.path(output_dir, "map.png"))
@@ -119,23 +120,26 @@ run_case("Pathview isolates each export and manifests exact source data", {
 
   stopifnot(length(calls) == 3L)
   stopifnot(all(!vapply(calls, `[[`, logical(1), "split_samples")))
+  stopifnot(all(!vapply(calls, `[[`, logical(1), "log_scale")))
   stopifnot(identical(calls[[1L]]$samples, c("S0", "S1")))
   stopifnot(identical(calls[[2L]]$samples, "S0"))
   stopifnot(identical(calls[[3L]]$samples, "S1"))
   stopifnot(!any(grepl("stale_old", result$pathview$output_file, fixed = TRUE)))
-  stopifnot(sum(result$pathview$output_type == "pathview_input_tsv") == 3L)
+  input_rows <- result$pathview$output_type == "pathview_input_all_ko_complete_matrix_tsv"
+  stopifnot(sum(input_rows) == 3L)
   stopifnot(sum(result$pathview$output_type == "pathview_render_config_tsv") == 3L)
   plot_rows <- result$pathview$output_type == "pathview_file"
   stopifnot(all(!is.na(result$pathview$source_data_file[plot_rows])))
   stopifnot(all(is.na(result$pathview$top_n_ko)))
-  stopifnot(all(result$pathview$ko_selection_policy == "all_pathway_mapped_ko"))
+  stopifnot(all(result$pathview$ko_selection_policy[input_rows] == "all_ko_complete_matrix"))
+  stopifnot(all(result$pathview$ko_selection_policy[plot_rows] == "pathview_native_mapping"))
   stopifnot(all(file.exists(file.path(test_root, result$pathview$output_file))))
 
   separate_rows <- result$pathview$output_scope == "pathway_defined_separato" & plot_rows
   stopifnot(setequal(result$pathview$samples[separate_rows], c("S0", "S1")))
   source_path <- file.path(
     test_root,
-    result$pathview$output_file[result$pathview$output_type == "pathview_input_tsv"][[1L]]
+    result$pathview$output_file[input_rows][[1L]]
   )
   source_data <- readr::read_tsv(source_path, show_col_types = FALSE)
   stopifnot(identical(source_data$ko_id, c("K00001", "K00002")))
@@ -196,7 +200,8 @@ run_case("zero-signal enzymes have status TSV but no PNG", {
     top_n_taxa = 15L,
     top_n_ko = 20L,
     enzyme_ecs = c("1.1.1.1", "2.2.2.2"),
-    enzyme_plot_types = c("bar", "line")
+    enzyme_plot_types = c("bar", "line"),
+    sample_order_basis = "sqm_column_order"
   ))
 
   zero_dir <- file.path(test_root, "funz", "enzimi", "separato", "2.2.2.2")
@@ -209,7 +214,7 @@ run_case("zero-signal enzymes have status TSV but no PNG", {
   png_rows <- result$funz$format == "png"
   stopifnot(all(result$funz$width[png_rows] == 2))
   stopifnot(all(result$funz$height[png_rows] == 2))
-  stopifnot(all(result$funz$sample_order_basis == "selected_samples_order"))
+  stopifnot(all(result$funz$sample_order_basis == "sqm_column_order"))
   combined_data <- readr::read_tsv(
     file.path(test_root, "funz", "enzimi", "insieme", "enzimi_data.tsv"),
     show_col_types = FALSE

@@ -199,12 +199,12 @@ run_case("help and no-argument CLI work with no optional R libraries", {
   }
 })
 
-run_case("analytical CLI reports all missing packages before side effects", {
+run_case("analytical CLI reports missing packages in a failed-run manifest", {
   test_root <- tempfile("p3_preflight_run_")
   empty_user_library <- file.path(test_root, "empty-user-library")
   empty_site_library <- file.path(test_root, "empty-site-library")
   project_dir <- file.path(test_root, "synthetic-project")
-  output_dir <- file.path(test_root, "must-not-exist")
+  output_dir <- file.path(test_root, "failed-run")
   dir.create(empty_user_library, recursive = TRUE)
   dir.create(empty_site_library, recursive = TRUE)
   dir.create(project_dir, recursive = TRUE)
@@ -256,8 +256,35 @@ run_case("analytical CLI reports all missing packages before side effects", {
     paste0("Missing-package error did not identify mode flow:\n", output_text)
   )
   expect_true(
-    !dir.exists(output_dir),
-    "Dependency preflight created output_dir before failing"
+    dir.exists(output_dir),
+    "Dependency preflight did not initialize failed-run provenance"
+  )
+  run_manifests <- list.files(
+    output_dir,
+    pattern = "^manifest_run__.*\\.tsv$",
+    full.names = TRUE
+  )
+  failure_manifests <- list.files(
+    output_dir,
+    pattern = "^manifest_failed_artifacts__.*\\.tsv$",
+    full.names = TRUE
+  )
+  expect_true(
+    length(run_manifests) == 1L && length(failure_manifests) == 1L,
+    "Dependency preflight did not write isolated failure manifests"
+  )
+  run_metadata <- utils::read.delim(
+    run_manifests[[1L]],
+    sep = "\t",
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    na.strings = "NA",
+    check.names = FALSE
+  )
+  expect_true(
+    identical(run_metadata$status, "failed") &&
+      grepl("Missing required R packages", run_metadata$error_message, fixed = TRUE),
+    "Dependency preflight failure metadata is incomplete"
   )
   expect_true(
     !grepl("Loading SQM project", output_text, fixed = TRUE),
@@ -266,6 +293,74 @@ run_case("analytical CLI reports all missing packages before side effects", {
   expect_true(
     !grepl("there is no package called", output_text, fixed = TRUE),
     paste0("A library() call failed before controlled preflight:\n", output_text)
+  )
+})
+
+run_case("malformed CLI after output_dir writes a failed-run manifest", {
+  test_root <- tempfile("p3_parse_failure_")
+  output_dir <- file.path(test_root, "failed-run")
+  dir.create(test_root, recursive = TRUE)
+  on.exit(unlink(test_root, recursive = TRUE, force = TRUE), add = TRUE)
+
+  script_path <- normalizePath("sqm_plots.R", winslash = "/", mustWork = TRUE)
+  rscript <- file.path(R.home("bin"), "Rscript.exe")
+  if (!file.exists(rscript)) {
+    rscript <- file.path(R.home("bin"), "Rscript")
+  }
+  if (.Platform$OS.type == "windows") {
+    rscript <- utils::shortPathName(rscript)
+  }
+
+  output <- suppressWarnings(system2(
+    command = rscript,
+    args = c(
+      "--vanilla",
+      shQuote(script_path),
+      shQuote(paste0("--output_dir=", output_dir)),
+      "--taxa"
+    ),
+    stdout = TRUE,
+    stderr = TRUE
+  ))
+  status <- attr(output, "status")
+  if (is.null(status)) {
+    status <- 0L
+  }
+
+  expect_true(
+    !identical(as.integer(status), 0L),
+    "Malformed analytical CLI unexpectedly succeeded"
+  )
+  expect_true(
+    dir.exists(output_dir),
+    "Recoverable output_dir was not initialized after a later parse error"
+  )
+  run_manifests <- list.files(
+    output_dir,
+    pattern = "^manifest_run__.*\\.tsv$",
+    full.names = TRUE
+  )
+  failure_manifests <- list.files(
+    output_dir,
+    pattern = "^manifest_failed_artifacts__.*\\.tsv$",
+    full.names = TRUE
+  )
+  expect_true(
+    length(run_manifests) == 1L && length(failure_manifests) == 1L,
+    "A parse error after output_dir did not produce isolated failure manifests"
+  )
+  run_metadata <- utils::read.delim(
+    run_manifests[[1L]],
+    sep = "\t",
+    header = TRUE,
+    stringsAsFactors = FALSE,
+    na.strings = "NA",
+    check.names = FALSE
+  )
+  expect_true(
+    identical(run_metadata$status, "failed") &&
+      grepl("Missing value for argument: --taxa", run_metadata$error_message, fixed = TRUE),
+    "Malformed CLI failure metadata is incomplete"
   )
 })
 
@@ -280,4 +375,4 @@ if (length(failures) > 0L) {
   )
 }
 
-message("PASS: P3 dependency preflight is mode-aware and side-effect free")
+message("PASS: P3 dependency preflight is mode-aware with failed-run provenance")

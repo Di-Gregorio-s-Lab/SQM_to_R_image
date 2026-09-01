@@ -15,6 +15,37 @@ for (candidate_root in args) {
   }
 }
 
+latest_successful_run_id <- function(root) {
+  run_manifests <- list.files(
+    root,
+    pattern = "^manifest_run__.*\\.tsv$",
+    full.names = TRUE
+  )
+  if (length(run_manifests) == 0L) {
+    stop("No run-specific manifest found in ", root, call. = FALSE)
+  }
+  metadata <- dplyr::bind_rows(lapply(
+    run_manifests,
+    readr::read_tsv,
+    show_col_types = FALSE,
+    na = "NA"
+  )) |>
+    dplyr::filter(.data$status == "success") |>
+    dplyr::arrange(.data$finished_at)
+  if (nrow(metadata) == 0L) {
+    stop("No successful run found in ", root, call. = FALSE)
+  }
+  metadata$run_id[[nrow(metadata)]]
+}
+
+run_file_pattern <- function(stem, run_id, extension) {
+  paste0("^", stem, "__", run_id, "\\.", extension, "$")
+}
+
+flow_run_id <- latest_successful_run_id(flow_root)
+funz_run_id <- latest_successful_run_id(funz_root)
+pie_run_id <- latest_successful_run_id(pie_root)
+
 audit_columns <- c(
   "input_orf_count",
   "excluded_orfs_without_ko",
@@ -45,7 +76,7 @@ assert_complete_audit <- function(manifest, label) {
 # reserved aggregate categories represented without conflation.
 flow_files <- list.files(
   flow_root,
-  pattern = "_data\\.tsv$",
+  pattern = paste0("_data__", flow_run_id, "\\.tsv$"),
   recursive = TRUE,
   full.names = TRUE
 )
@@ -70,14 +101,20 @@ if (!all(c("Unclassified", "Other") %in% unique(flow$taxon))) {
   stop("FLOW candidate does not keep Unclassified distinct from Other.", call. = FALSE)
 }
 flow_manifest <- readr::read_tsv(
-  file.path(flow_root, "flowplot", "manifest_flow.tsv"),
+  file.path(flow_root, "flowplot", paste0("manifest_flow__", flow_run_id, ".tsv")),
   show_col_types = FALSE
 )
-if (any(flow_manifest$pathway_id != "00361") || any(flow_manifest$top_n_taxa != 3L)) {
+if (any(flow_manifest$run_id != flow_run_id) ||
+    any(flow_manifest$pathway_id != "00361") || any(flow_manifest$top_n_taxa != 3L)) {
   stop("FLOW candidate manifest does not describe pathway 00361 Top 3.", call. = FALSE)
 }
 assert_complete_audit(flow_manifest, "FLOW")
-flow_png <- list.files(flow_root, pattern = "\\.png$", recursive = TRUE, full.names = TRUE)
+flow_png <- list.files(
+  flow_root,
+  pattern = paste0("__", flow_run_id, "\\.png$"),
+  recursive = TRUE,
+  full.names = TRUE
+)
 if (length(flow_png) != 3L) {
   stop("FLOW candidate must contain three PNG files.", call. = FALSE)
 }
@@ -87,7 +124,7 @@ assert_nonempty_files(flow_png, "FLOW PNG")
 # and no artificial Other row because top_n_ko=999 includes every KO.
 funz_files <- list.files(
   funz_root,
-  pattern = "barplot_ko_data\\.tsv$",
+  pattern = run_file_pattern("barplot_ko_data", funz_run_id, "tsv"),
   recursive = TRUE,
   full.names = TRUE
 )
@@ -121,17 +158,18 @@ if (nrow(multi_ec_funz) != 3L) {
   stop("FUNZ candidate did not expose the three observed multi-EC KOs.", call. = FALSE)
 }
 funz_manifest <- readr::read_tsv(
-  file.path(funz_root, "funz", "manifest_funz.tsv"),
+  file.path(funz_root, "funz", paste0("manifest_funz__", funz_run_id, ".tsv")),
   show_col_types = FALSE
 ) |>
   dplyr::filter(.data$mode == "funz")
-if (any(funz_manifest$pathway_id != "00710") || any(funz_manifest$top_n_ko != 999L)) {
+if (any(funz_manifest$run_id != funz_run_id) ||
+    any(funz_manifest$pathway_id != "00710") || any(funz_manifest$top_n_ko != 999L)) {
   stop("FUNZ candidate manifest does not describe pathway 00710/top_n_ko=999.", call. = FALSE)
 }
 assert_complete_audit(funz_manifest, "FUNZ")
 funz_png <- list.files(
   file.path(funz_root, "funz", "pathway"),
-  pattern = "barplot_ko_.*\\.png$",
+  pattern = paste0("barplot_ko_.*__", funz_run_id, "\\.png$"),
   recursive = TRUE,
   full.names = TRUE
 )
@@ -144,7 +182,7 @@ assert_nonempty_files(funz_png, "FUNZ PNG")
 # association is identical in its TSV and manifest.
 pie_files <- list.files(
   pie_root,
-  pattern = "_data\\.tsv$",
+  pattern = paste0("_data__", pie_run_id, "\\.tsv$"),
   recursive = TRUE,
   full.names = TRUE
 )
@@ -167,16 +205,22 @@ if (!any(pie$ko_id == "K10679" & pie$ec_codes == expected_multi_ec)) {
   stop("PIE candidate TSV truncated the K10679 EC list.", call. = FALSE)
 }
 pie_manifest <- readr::read_tsv(
-  file.path(pie_root, "pie", "manifest_pie.tsv"),
+  file.path(pie_root, "pie", paste0("manifest_pie__", pie_run_id, ".tsv")),
   show_col_types = FALSE
 )
-if (any(pie_manifest$pathway_id != "00633") ||
+if (any(pie_manifest$run_id != pie_run_id) ||
+    any(pie_manifest$pathway_id != "00633") ||
     any(pie_manifest$samples != "S13_1_8") ||
     !any(pie_manifest$ko_id == "K10679" & pie_manifest$ec_code == expected_multi_ec)) {
   stop("PIE candidate manifest does not retain the requested scope or full EC list.", call. = FALSE)
 }
 assert_complete_audit(pie_manifest, "PIE")
-pie_png <- list.files(pie_root, pattern = "\\.png$", recursive = TRUE, full.names = TRUE)
+pie_png <- list.files(
+  pie_root,
+  pattern = paste0("__", pie_run_id, "\\.png$"),
+  recursive = TRUE,
+  full.names = TRUE
+)
 if (length(pie_png) != 11L) {
   stop("PIE candidate must contain 11 PNG files.", call. = FALSE)
 }

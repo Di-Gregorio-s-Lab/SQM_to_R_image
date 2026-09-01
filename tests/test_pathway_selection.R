@@ -101,9 +101,14 @@ fake_export_pathway <- function(
     count,
     samples,
     split_samples,
+    log_scale,
     output_dir,
     output_suffix) {
-  calls[[length(calls) + 1L]] <<- list(output_dir = output_dir, split_samples = split_samples)
+  calls[[length(calls) + 1L]] <<- list(
+    output_dir = output_dir,
+    split_samples = split_samples,
+    log_scale = log_scale
+  )
   writeLines("fake pathview output", file.path(output_dir, "map.png"))
 }
 
@@ -134,6 +139,7 @@ result <- script_env$run_pathview_mode(
 
 stopifnot(length(calls) == 3L)
 stopifnot(all(!vapply(calls, `[[`, logical(1), "split_samples")))
+stopifnot(all(!vapply(calls, `[[`, logical(1), "log_scale")))
 stopifnot(identical(
   sort(unique(result$pathview$output_scope)),
   c("pathway_top20_insieme", "pathway_top20_separato")
@@ -218,6 +224,5 @@ stopifnot(nrow(legacy_pie_entry) == 0L)
 script_env$write_section_manifest(pie_result$pie, test_root, "pie", "manifest_pie.tsv")
 deduplicated_pie_manifest <- readr::read_tsv(merged_pie_path, show_col_types = FALSE, na = "NA")
 stopifnot(nrow(deduplicated_pie_manifest) == nrow(merged_pie_manifest))
-stopifnot(identical(names(script_env$section_manifest_paths(test_root)), "pie"))
 
 message("PASS: Pathway selection ranks top pathways and scopes Pathview output")

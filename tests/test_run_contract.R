@@ -32,6 +32,29 @@ sqm_selection <- script_env$resolve_sample_selection(NULL, c("S3", "S1", "S2"))
 stopifnot(identical(sqm_selection$samples, c("S3", "S1", "S2")))
 stopifnot(identical(sqm_selection$basis, "sqm_column_order"))
 
+fallback_root <- tempfile("fallback_tsv_contract_")
+dir.create(fallback_root, recursive = TRUE)
+on.exit(unlink(fallback_root, recursive = TRUE, force = TRUE), add = TRUE)
+fallback_source <- data.frame(
+  field = c("tab\tinside", "line one\nline two", "quote \"inside\""),
+  stringsAsFactors = FALSE
+)
+fallback_path <- script_env$write_tsv_safe(
+  fallback_source,
+  file.path(fallback_root, "fallback.tsv"),
+  readr_available = FALSE
+)
+fallback_roundtrip <- utils::read.delim(
+  fallback_path,
+  sep = "\t",
+  header = TRUE,
+  quote = "\"",
+  comment.char = "",
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+stopifnot(identical(fallback_roundtrip$field, fallback_source$field))
+
 subset_calls <- list()
 fake_subset_fun <- function(
     SQM, fun, columns, ignore_case, fixed, allow_empty) {
@@ -67,6 +90,7 @@ prepared <- withCallingHandlers(
   }
 )
 stopifnot(all(vapply(subset_calls, `[[`, logical(1), "allow_empty")))
+stopifnot(script_env$is_empty_pathway_subset(list()))
 stopifnot(length(prepared$pathway_sqms) == 1L)
 stopifnot(nrow(prepared$skips) == 1L)
 stopifnot(identical(prepared$skips$pathway[[1L]], "Empty pathway"))

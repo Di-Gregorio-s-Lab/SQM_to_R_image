@@ -21,12 +21,39 @@ is_safe_relative <- function(path) {
     !".." %in% strsplit(gsub("\\\\", "/", path), "/+", perl = TRUE)[[1L]]
 }
 
+latest_successful_run_id <- function(root) {
+  run_manifests <- list.files(
+    root,
+    pattern = "^manifest_run__.*\\.tsv$",
+    full.names = TRUE
+  )
+  if (length(run_manifests) == 0L) {
+    stop("No run-specific manifest found in ", root, call. = FALSE)
+  }
+  metadata <- dplyr::bind_rows(lapply(
+    run_manifests,
+    readr::read_tsv,
+    show_col_types = FALSE,
+    na = "NA"
+  )) |>
+    dplyr::filter(.data$status == "success") |>
+    dplyr::arrange(.data$finished_at)
+  if (nrow(metadata) == 0L) {
+    stop("No successful run found in ", root, call. = FALSE)
+  }
+  metadata$run_id[[nrow(metadata)]]
+}
+
 verify_manifest_tree <- function(root, expected_sections = NULL) {
-  manifest_all_path <- file.path(root, "manifest_all.tsv")
+  run_id <- latest_successful_run_id(root)
+  manifest_all_path <- file.path(root, paste0("manifest_all__", run_id, ".tsv"))
   if (!file.exists(manifest_all_path) || file.info(manifest_all_path)$size <= 0) {
     stop("Missing or empty manifest_all.tsv in ", root, call. = FALSE)
   }
   manifest_all <- readr::read_tsv(manifest_all_path, show_col_types = FALSE, na = "NA")
+  if (any(manifest_all$run_id != run_id)) {
+    stop("manifest_all contains rows from another run in ", root, call. = FALSE)
+  }
   if (!is.null(expected_sections) && !setequal(manifest_all$section, expected_sections)) {
     stop("manifest_all.tsv has unexpected sections in ", root, call. = FALSE)
   }
@@ -41,6 +68,9 @@ verify_manifest_tree <- function(root, expected_sections = NULL) {
       stop("Missing section manifest: ", manifest_relative, call. = FALSE)
     }
     section_manifest <- readr::read_tsv(manifest_path, show_col_types = FALSE, na = "NA")
+    if (any(section_manifest$run_id != run_id)) {
+      stop("Section manifest mixes run IDs: ", manifest_relative, call. = FALSE)
+    }
     if (nrow(section_manifest) == 0L || !all(vapply(section_manifest$output_file, is_safe_relative, logical(1)))) {
       stop("Section manifest is empty or unsafe: ", manifest_relative, call. = FALSE)
     }
@@ -51,11 +81,17 @@ verify_manifest_tree <- function(root, expected_sections = NULL) {
     }
     total_targets <- total_targets + length(targets)
   }
-  total_targets
+  structure(total_targets, run_id = run_id)
 }
 
 windows_targets <- verify_manifest_tree(windows_root)
-windows_png <- list.files(windows_root, pattern = "\\.png$", recursive = TRUE, full.names = TRUE)
+windows_run_id <- attr(windows_targets, "run_id")
+windows_png <- list.files(
+  windows_root,
+  pattern = paste0("__", windows_run_id, "\\.png$"),
+  recursive = TRUE,
+  full.names = TRUE
+)
 if (length(windows_png) == 0L || any(file.info(windows_png)$size <= 0)) {
   stop("Windows candidate has no non-empty PNG files.", call. = FALSE)
 }
@@ -63,12 +99,21 @@ windows_png_abs <- normalizePath(windows_png, winslash = "/", mustWork = TRUE)
 if (any(nchar(windows_png_abs, type = "chars") > 240L)) {
   stop("Windows candidate contains a PNG path over 240 characters.", call. = FALSE)
 }
-if (!any(grepl("__[[:xdigit:]]{12}_[^/]+\\.png$", windows_png_abs, perl = TRUE))) {
+compact_pattern <- paste0(
+  "__[[:xdigit:]]{12}_[^/]+__", windows_run_id, "\\.png$"
+)
+if (!any(grepl(compact_pattern, windows_png_abs, perl = TRUE))) {
   stop("Windows candidate did not exercise deterministic PNG compaction.", call. = FALSE)
 }
 
 pie_targets <- verify_manifest_tree(pie_root)
-pie_tsv <- list.files(pie_root, pattern = "_data\\.tsv$", recursive = TRUE, full.names = TRUE)
+pie_run_id <- attr(pie_targets, "run_id")
+pie_tsv <- list.files(
+  pie_root,
+  pattern = paste0("_data__", pie_run_id, "\\.tsv$"),
+  recursive = TRUE,
+  full.names = TRUE
+)
 if (length(pie_tsv) == 0L) {
   stop("PIE candidate has no exported data TSV.", call. = FALSE)
 }

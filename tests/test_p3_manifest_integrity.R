@@ -44,8 +44,8 @@ read_file_bytes <- function(path) {
 
 script_env <- source_without_main("sqm_plots.R")
 
-# Existing valid targets survive, stale targets are pruned with a section-specific
-# warning, and a new row wins when it has the same output_file as an old row.
+# A section manifest contains only current-run rows. A pre-existing inventory is
+# neither read nor merged into the new run contract.
 section_root <- tempfile("p3_manifest_section_")
 dir.create(section_root, recursive = TRUE)
 on.exit(unlink(section_root, recursive = TRUE, force = TRUE), add = TRUE)
@@ -94,12 +94,8 @@ expect_true(
   "An existing manifest row took precedence over the current run"
 )
 expect_true(
-  any(grepl("taxon", captured_warnings, ignore.case = TRUE)),
-  "The stale-target warning does not identify the taxon section"
-)
-expect_true(
-  any(grepl("1", captured_warnings, fixed = TRUE)),
-  "The stale-target warning does not report the number of pruned rows"
+  length(captured_warnings) == 0L,
+  "Current-run manifest writing unexpectedly reconciled historical rows"
 )
 
 # Invalid rows from the current run must fail transactionally: the existing
@@ -161,9 +157,8 @@ expect_rejected_without_rewrite(
   "A path-traversal current-run target"
 )
 
-# The combined manifest is rebuilt from all section manifests under output_dir.
-# Sections reduced to zero valid rows are omitted, and every referenced manifest
-# and artifact must exist and be non-empty.
+# The combined manifest is built only from section manifests explicitly produced
+# by the current run. Historical manifests elsewhere in output_dir are ignored.
 combined_root <- tempfile("p3_manifest_all_")
 dir.create(combined_root, recursive = TRUE)
 on.exit(unlink(combined_root, recursive = TRUE, force = TRUE), add = TRUE)
@@ -190,7 +185,10 @@ script_env$write_tsv_safe(
 
 combined_warnings <- character()
 combined_manifest_path <- withCallingHandlers(
-  script_env$write_combined_manifest(combined_root),
+  script_env$write_combined_manifest(
+    combined_root,
+    section_manifest_paths = c(flow = flow_manifest_path, pie = pie_manifest_path)
+  ),
   warning = function(warning_condition) {
     combined_warnings <<- c(combined_warnings, conditionMessage(warning_condition))
     invokeRestart("muffleWarning")
@@ -206,7 +204,7 @@ expect_true(
 )
 combined_rows <- readr::read_tsv(combined_manifest_path, show_col_types = FALSE, na = "NA")
 expect_true(
-  identical(names(combined_rows), c("section", "manifest_file")),
+  identical(names(combined_rows), c("run_id", "section", "manifest_file")),
   "manifest_all.tsv changed its public schema"
 )
 expect_true(
@@ -214,9 +212,8 @@ expect_true(
   "manifest_all.tsv included a stale/empty section or omitted a valid section"
 )
 expect_true(
-  any(grepl("taxon", combined_warnings, ignore.case = TRUE)) &&
-    any(grepl("1", combined_warnings, fixed = TRUE)),
-  "Combined reconciliation did not warn about the one stale taxon row"
+  length(combined_warnings) == 0L,
+  "Combined manifest unexpectedly inspected historical section manifests"
 )
 
 for (manifest_relative in combined_rows$manifest_file) {
@@ -234,10 +231,10 @@ for (manifest_relative in combined_rows$manifest_file) {
 }
 
 pruned_taxon <- readr::read_tsv(taxon_manifest_path, show_col_types = FALSE, na = "NA")
-expect_true(nrow(pruned_taxon) == 0L, "Combined reconciliation did not leave the stale-only manifest empty")
+expect_true(nrow(pruned_taxon) == 1L, "Combined manifest rewrote a historical taxon manifest")
 
-# A malformed legacy manifest without output_file is stale as a whole. It must
-# be pruned without aborting the aggregate reconciliation.
+# A malformed historical manifest is outside the current run and must be ignored
+# without being rewritten.
 malformed_root <- tempfile("p3_manifest_malformed_")
 dir.create(file.path(malformed_root, "flowplot"), recursive = TRUE)
 on.exit(unlink(malformed_root, recursive = TRUE, force = TRUE), add = TRUE)
@@ -258,10 +255,10 @@ malformed_result <- withCallingHandlers(
 malformed_all <- readr::read_tsv(malformed_result, show_col_types = FALSE, na = "NA")
 malformed_section <- readr::read_tsv(malformed_manifest_path, show_col_types = FALSE, na = "NA")
 expect_true(nrow(malformed_all) == 0L, "Malformed stale manifest entered manifest_all.tsv")
-expect_true(nrow(malformed_section) == 0L, "Malformed legacy rows were not pruned")
+expect_true(nrow(malformed_section) == 1L, "Malformed historical manifest was rewritten")
 expect_true(
-  any(grepl("missing output_file", malformed_warnings, fixed = TRUE)),
-  "Malformed legacy manifest did not report the missing output_file column"
+  length(malformed_warnings) == 0L,
+  "Malformed historical manifest was inspected during the current run"
 )
 
-message("PASS: P3 manifest target integrity and aggregate reconciliation")
+message("PASS: P3 manifest target integrity and per-run isolation")

@@ -135,6 +135,7 @@ fake_export_pathway <- function(
     count,
     samples,
     split_samples,
+    log_scale,
     output_dir,
     output_suffix) {
   exported_pathway_ids <<- c(exported_pathway_ids, pathway_id)

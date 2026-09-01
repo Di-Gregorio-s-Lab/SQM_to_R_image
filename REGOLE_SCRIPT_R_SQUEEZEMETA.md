@@ -164,7 +164,8 @@ pathway_sqm <- SQMtools::subsetFun(
   fun = canonical_pathway_name,
   columns = "KEGGPATH",
   ignore_case = FALSE,
-  fixed = TRUE
+  fixed = TRUE,
+  allow_empty = TRUE
 )
 ```
 
@@ -276,23 +277,38 @@ dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 Regole:
 
 - non cancellare ricorsivamente una directory di output già esistente;
-- sovrascrivere soltanto file omonimi che lo script dichiara di produrre;
+- assegnare a ogni corsa un `run_id` nel formato
+  `YYYYMMDDTHHMMSS_UTCpHHMM_<4hex>` (`UTCmHHMM` per offset negativi);
+- aggiungere `__<run_id>` prima dell'estensione di ogni artefatto senza
+  modificare i nomi delle directory;
 - separare pathway, ranghi e campioni in sottodirectory con nomi sanitizzati;
 - usare TSV per le tabelle di supporto;
 - ogni grafico deve avere una tabella TSV contenente esattamente i dati
   utilizzati per costruirlo;
-- ogni esecuzione deve produrre un manifest TSV.
+- ogni esecuzione deve produrre manifest di sezione e di corsa distinti, mai
+  fusi con manifest storici.
+
+Eccezione di provenienza Pathview: il file
+`pathview_input_all_ko_complete_matrix__<run_id>.tsv` documenta la matrice KO
+completa passata tramite l'oggetto SQM. È un superset di input e non deve
+essere descritto come tabella dei soli nodi effettivamente disegnati da
+Pathview.
 
 Il manifest deve contenere almeno:
 
 ```text
-script, project_dir, tax_mode, pathway, samples, metric,
+run_id, script, project_dir, tax_mode, pathway, samples, metric,
 top_n_taxa, top_n_ko, output_type, output_file
 ```
 
 Aggiungere, quando pertinenti, dimensioni, DPI, rango tassonomico e modalità
 di raggruppamento. Preferire percorsi relativi alla directory di output per
 rendere il manifest trasferibile.
+
+Il manifest di corsa deve inoltre registrare stato, inizio/fine, argomenti CLI,
+ordine dei campioni e sua origine (`cli` o `sqm_column_order`), warning, pathway
+saltati ed eventuale errore. Una corsa fallita conserva gli artefatti parziali,
+scrive `manifest_failed_artifacts__<run_id>.tsv` e termina con codice non zero.
 
 ### 7.2 Colori
 
@@ -315,11 +331,20 @@ colori_hex <- c(
   "#e7feff", "#f0dc82"
 )
 
-Eccezione esplicita: i grafici creati da `SQMtools::plotTaxonomy()` conservano
+Eccezioni esplicite: i grafici creati da `SQMtools::plotTaxonomy()` conservano
 la palette nativa di SQMtools. Non passare a `plotTaxonomy()` l'intero vettore
 `colori_hex`, perché la funzione richiede un numero di colori coerente con
-`N` e altrimenti lo ignora emettendo un warning. Questa eccezione non si
-applica agli altri grafici dello script.
+`N` e altrimenti lo ignora emettendo un warning. Anche Pathview conserva i
+colori nativi: non passare `sample_colors` e registrare
+`color_source=pathview_native`. Queste eccezioni non si applicano agli altri
+grafici dello script.
+
+### 7.3 Ordine dei campioni nei line plot
+
+Se `--samples` è presente, usare esattamente l'ordine CLI; altrimenti
+conservare l'ordine delle colonne SQM. I line plot enzimatici collegano i
+campioni secondo questo ordine di visualizzazione e non dichiarano, da soli,
+una semantica temporale o una continuità sperimentale.
 
 ## 8. Gestione degli errori
 
@@ -329,12 +354,14 @@ Usare `stop(..., call. = FALSE)` per:
 - struttura SQM incompleta;
 - campioni o ranghi richiesti assenti;
 - pathway inesistente o ambiguo;
-- matrici vuote o chiavi ORF duplicate/mancanti;
+- matrici sorgente vuote o chiavi ORF duplicate/mancanti;
 - opzioni CLI non valide.
 
-Usare `warning(..., call. = FALSE)` e saltare soltanto la combinazione
-interessata quando un pathway valido non contiene righe positive per uno
-specifico campione, rango o grafico.
+Chiamare `subsetFun(..., allow_empty=TRUE)`. Usare
+`warning(..., call. = FALSE)` e saltare soltanto la combinazione interessata
+quando un pathway valido produce un subset vuoto o non contiene righe positive
+per uno specifico campione, rango o grafico. Un pathway vuoto non deve bloccare
+la tassonomia globale o altre modalità indipendenti.
 
 I messaggi finali devono indicare chiaramente la directory di output e i
 manifest creati.
