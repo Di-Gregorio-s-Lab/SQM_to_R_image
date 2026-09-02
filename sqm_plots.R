@@ -2698,40 +2698,20 @@ build_flow_legend_spec <- function(flow_tbl, tolerance = 1e-6) {
   list(taxonomy = taxonomy, functional = functional)
 }
 
-build_flow_palette <- function(levels, used_count = 0L) {
-  levels <- unique(as.character(levels))
-  levels <- levels[!is.na(levels) & nzchar(levels)]
-  non_other <- setdiff(levels, "Other")
-  palette_values <- colors_hex[
-    ((used_count + seq_along(non_other) - 1L) %% length(colors_hex)) + 1L
-  ]
-  stats::setNames(
-    c(palette_values, if ("Other" %in% levels) "grey70" else character()),
-    c(non_other, if ("Other" %in% levels) "Other" else character())
-  )
-}
-
-build_flow_palettes <- function(taxon_levels, ko_levels) {
-  tax_palette <- build_flow_palette(taxon_levels)
-  ko_palette <- build_flow_palette(
-    ko_levels,
-    used_count = sum(names(tax_palette) != "Other")
-  )
-  list(taxonomy = tax_palette, functional = ko_palette)
-}
-
 make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
   taxon_levels <- levels(flow_tbl$taxon)
   ko_levels <- levels(flow_tbl$KO)
   legend_spec <- build_flow_legend_spec(flow_tbl)
   lodes_tbl <- ggalluvial::to_lodes_form(flow_tbl, axes = c("taxon", "KO"), discern = FALSE) |>
-    mutate(
-      x = factor(.data$x, levels = c("taxon", "KO"), labels = c("Taxon", "KO")),
-      stratum = as.character(.data$stratum)
-    )
-  flow_palettes <- build_flow_palettes(taxon_levels, ko_levels)
-  tax_palette <- flow_palettes$taxonomy
-  ko_palette <- flow_palettes$functional
+    mutate(x = factor(.data$x, levels = c("taxon", "KO"), labels = c("Taxon", "KO")))
+  tax_palette <- c(
+    stats::setNames(rep(colors_hex, length.out = length(setdiff(taxon_levels, "Other"))), setdiff(taxon_levels, "Other")),
+    if ("Other" %in% taxon_levels) c(Other = "grey70") else NULL
+  )
+  ko_palette <- c(
+    stats::setNames(rep(colors_hex, length.out = length(setdiff(ko_levels, "Other"))), setdiff(ko_levels, "Other")),
+    if ("Other" %in% ko_levels) c(Other = "grey70") else NULL
+  )
 
   ggplot(
     flow_tbl,
