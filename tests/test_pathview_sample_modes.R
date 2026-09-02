@@ -108,3 +108,29 @@ stopifnot(identical(config$color_source, "pathview_native"))
 stopifnot(identical(config$input_scope, "complete_all_ko_matrix"))
 
 message("PASS: Pathview creates combined and split-sample output branches")
+
+empty_export_pathway <- function(...) invisible(NULL)
+empty_result <- tryCatch(
+  script_env$run_pathview_mode(
+    sqm_object = list(functions = list(KEGG = list(tpm = data.frame(
+      S0 = 1, row.names = "K00001"
+    )))),
+    output_dir = test_root,
+    manifest_base_dir = test_root,
+    output_manifests = list(pathview = tibble::tibble()),
+    script_name = "sqm_plots.R",
+    project_dir = "project",
+    tax_mode = "prokfilter",
+    pathway_name = "Unavailable pathway",
+    pathway_id = "00710",
+    selected_samples = "S0",
+    top_n_taxa = 15L,
+    top_n_ko = 20L,
+    pathview_sample_modes = "insieme",
+    export_pathway_fn = empty_export_pathway
+  ),
+  error = function(error) error
+)
+stopifnot(!inherits(empty_result, "error"))
+stopifnot(nrow(empty_result$pathview) == 2L)
+message("PASS: Pathview skips unavailable pathway output without aborting")

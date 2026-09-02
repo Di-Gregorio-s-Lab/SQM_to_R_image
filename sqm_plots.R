@@ -4454,12 +4454,24 @@ run_pathview_mode <- function(
         " | samples=", paste(current_samples, collapse = ","),
         " | isolated export"
       )
-      produced_files <- export_pathview_isolated(
-        export_pathway_fn = export_pathway_fn,
-        sqm_object = sqm_object,
-        pathway_id = pathway_id,
-        selected_samples = current_samples,
-        final_dir = pathview_dir
+      produced_files <- tryCatch(
+        export_pathview_isolated(
+          export_pathway_fn = export_pathway_fn,
+          sqm_object = sqm_object,
+          pathway_id = pathway_id,
+          selected_samples = current_samples,
+          final_dir = pathview_dir
+        ),
+        error = function(error) {
+          warning(
+            "Skipping PATHVIEW export for pathway ", pathway_id,
+            " (mode=", pathview_sample_mode,
+            ", samples=", paste(current_samples, collapse = ","),
+            "): ", conditionMessage(error),
+            call. = FALSE
+          )
+          character()
+        }
       )
       for (output_file in produced_files) {
         output_manifests$pathview <- append_pathview_row(
