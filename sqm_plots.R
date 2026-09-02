@@ -2904,13 +2904,129 @@ extract_taxonomy_plot_data <- function(plot_object, count) {
   plot_data
 }
 
+taxonomy_category_subsets <- function(categories) {
+  categories <- unique(as.character(categories))
+  subsets <- list(character())
+  if (length(categories) == 0L) {
+    return(subsets)
+  }
+  for (subset_size in seq_along(categories)) {
+    combinations <- utils::combn(categories, subset_size, simplify = FALSE)
+    subsets <- c(subsets, combinations)
+  }
+  subsets
+}
+
+resolve_effective_taxonomy_exclusions <- function(
+    percent_frame,
+    displayed_percent_sum,
+    selected_samples,
+    requested_excluded_categories = c("Unmapped", "Unclassified"),
+    tolerance = 1e-6) {
+  selected_samples <- as.character(selected_samples)
+  requested_excluded_categories <- unique(as.character(requested_excluded_categories))
+  displayed_percent_sum <- as.numeric(displayed_percent_sum[selected_samples])
+  names(displayed_percent_sum) <- selected_samples
+
+  if (anyNA(displayed_percent_sum) || any(!is.finite(displayed_percent_sum))) {
+    stop(
+      "Displayed global taxonomy percentages are missing or non-finite for selected samples.",
+      call. = FALSE
+    )
+  }
+
+  raw_percent_sum <- colSums(percent_frame[, selected_samples, drop = FALSE])
+  unexplained_percent <- raw_percent_sum - displayed_percent_sum
+  unexplained_percent[abs(unexplained_percent) <= tolerance] <- 0
+  if (any(unexplained_percent < -tolerance)) {
+    stop(
+      "Global taxonomy percentages cannot be reconciled: displayed values exceed raw percentages.",
+      call. = FALSE
+    )
+  }
+
+  present_requested <- intersect(
+    requested_excluded_categories,
+    rownames(percent_frame)
+  )
+  positive_requested <- present_requested[vapply(
+    present_requested,
+    function(category) {
+      any(percent_frame[category, selected_samples, drop = TRUE] > tolerance)
+    },
+    logical(1)
+  )]
+  candidate_subsets <- taxonomy_category_subsets(positive_requested)
+  candidate_matches <- vapply(
+    candidate_subsets,
+    function(categories) {
+      candidate_percent <- if (length(categories) == 0L) {
+        stats::setNames(rep(0, length(selected_samples)), selected_samples)
+      } else {
+        colSums(percent_frame[categories, selected_samples, drop = FALSE])
+      }
+      all(abs(candidate_percent[selected_samples] - unexplained_percent[selected_samples]) <= tolerance)
+    },
+    logical(1)
+  )
+
+  matching_subsets <- candidate_subsets[candidate_matches]
+  if (length(matching_subsets) == 0L) {
+    stop(
+      "Global taxonomy percentages cannot be reconciled with requested exclusions.",
+      call. = FALSE
+    )
+  }
+  if (length(matching_subsets) > 1L) {
+    stop(
+      "Global taxonomy effective exclusions are ambiguous across selected samples.",
+      call. = FALSE
+    )
+  }
+
+  effective_categories <- matching_subsets[[1L]]
+  retained_categories <- setdiff(positive_requested, effective_categories)
+  excluded_percent <- if (length(effective_categories) == 0L) {
+    stats::setNames(rep(0, length(selected_samples)), selected_samples)
+  } else {
+    colSums(percent_frame[effective_categories, selected_samples, drop = FALSE])
+  }
+  accounted_percent_sum <- displayed_percent_sum + excluded_percent
+  if (any(abs(accounted_percent_sum - raw_percent_sum) > tolerance)) {
+    stop(
+      "Global taxonomy accounted percentages do not match raw percentages.",
+      call. = FALSE
+    )
+  }
+
+  resolution_status <- if (length(positive_requested) == 0L) {
+    "no_positive_requested_exclusions"
+  } else if (length(retained_categories) > 0L) {
+    "requested_retained"
+  } else {
+    "matched_requested"
+  }
+
+  list(
+    raw_percent_sum = raw_percent_sum,
+    displayed_percent_sum = displayed_percent_sum,
+    excluded_percent = excluded_percent,
+    accounted_percent_sum = accounted_percent_sum,
+    requested_excluded_categories = requested_excluded_categories,
+    effective_excluded_categories = effective_categories,
+    retained_requested_categories = retained_categories,
+    exclusion_resolution_status = resolution_status
+  )
+}
+
 add_global_taxonomy_percent_metadata <- function(
     plot_data,
     sqm_object,
     rank,
     selected_samples,
     excluded_categories = c("Unmapped", "Unclassified"),
-    tolerance = 1e-6) {
+    tolerance = 1e-6,
+    context_label = "global") {
   required_columns <- c("sample", "value", "count")
   missing_columns <- setdiff(required_columns, colnames(plot_data))
   if (length(missing_columns) > 0L) {
@@ -2950,42 +3066,74 @@ add_global_taxonomy_percent_metadata <- function(
     stop("sqm$total_reads must be finite and positive for selected samples.", call. = FALSE)
   }
 
-  present_exclusions <- intersect(excluded_categories, rownames(percent_frame))
-  excluded_by_sample <- if (length(present_exclusions) == 0L) {
-    stats::setNames(rep(0, length(selected_samples)), selected_samples)
-  } else {
-    colSums(percent_frame[present_exclusions, selected_samples, drop = FALSE])
-  }
   displayed_by_sample <- plot_data |>
     mutate(sample = as.character(.data$sample)) |>
     group_by(.data$sample) |>
     summarise(displayed_percent_sum = sum(.data$value), .groups = "drop")
-  audit_by_sample <- tibble::tibble(
-    sample = selected_samples,
-    denominator_value = as.numeric(denominator_values),
-    excluded_percent = as.numeric(excluded_by_sample[selected_samples])
-  ) |>
-    left_join(displayed_by_sample, by = "sample")
-
-  invalid_totals <- is.na(audit_by_sample$displayed_percent_sum) |
-    abs(
-      audit_by_sample$displayed_percent_sum + audit_by_sample$excluded_percent - 100
-    ) > tolerance
-  if (any(invalid_totals)) {
+  unknown_samples <- setdiff(displayed_by_sample$sample, selected_samples)
+  if (length(unknown_samples) > 0L) {
     stop(
-      "Displayed plus excluded global taxonomy percent does not sum to 100 for: ",
-      paste(audit_by_sample$sample[invalid_totals], collapse = ", "),
+      "Global taxonomy plot data contains unexpected samples: ",
+      paste(unknown_samples, collapse = ", "),
       call. = FALSE
     )
   }
+  displayed_percent_sum <- stats::setNames(
+    displayed_by_sample$displayed_percent_sum,
+    displayed_by_sample$sample
+  )
+  exclusion_audit <- resolve_effective_taxonomy_exclusions(
+    percent_frame = percent_frame,
+    displayed_percent_sum = displayed_percent_sum,
+    selected_samples = selected_samples,
+    requested_excluded_categories = excluded_categories,
+    tolerance = tolerance
+  )
+  serialize_categories <- function(categories) {
+    if (length(categories) == 0L) NA_character_ else paste(categories, collapse = ";")
+  }
+  if (length(exclusion_audit$retained_requested_categories) > 0L) {
+    warning(
+      "SQMtools::plotTaxonomy retained requested exclusion categories in displayed data",
+      " | context=", as.character(context_label),
+      " | rank=", as.character(rank),
+      ": ", paste(exclusion_audit$retained_requested_categories, collapse = ", "),
+      "; values may be included in Other.",
+      call. = FALSE
+    )
+  }
+  audit_by_sample <- tibble::tibble(
+    sample = selected_samples,
+    denominator_value = as.numeric(denominator_values),
+    raw_percent_sum = as.numeric(exclusion_audit$raw_percent_sum[selected_samples]),
+    displayed_percent_sum = as.numeric(
+      exclusion_audit$displayed_percent_sum[selected_samples]
+    ),
+    excluded_percent = as.numeric(exclusion_audit$excluded_percent[selected_samples]),
+    accounted_percent_sum = as.numeric(
+      exclusion_audit$accounted_percent_sum[selected_samples]
+    ),
+    requested_excluded_categories = serialize_categories(
+      exclusion_audit$requested_excluded_categories
+    ),
+    effective_excluded_categories = serialize_categories(
+      exclusion_audit$effective_excluded_categories
+    ),
+    retained_requested_categories = serialize_categories(
+      exclusion_audit$retained_requested_categories
+    ),
+    exclusion_resolution_status = exclusion_audit$exclusion_resolution_status,
+    excluded_categories = serialize_categories(
+      exclusion_audit$effective_excluded_categories
+    )
+  )
 
   plot_data |>
     mutate(sample = as.character(.data$sample)) |>
     left_join(audit_by_sample, by = "sample", relationship = "many-to-one") |>
     mutate(
       percent_of_total_library = .data$value,
-      denominator_type = "total_reads",
-      excluded_categories = paste(excluded_categories, collapse = ";")
+      denominator_type = "total_reads"
     )
 }
 
@@ -3982,11 +4130,17 @@ run_taxonomy_scope <- function(
         )
         plot_data <- extract_taxonomy_plot_data(plot_object, count)
         if (scope_name == "taxonomy_global" && identical(count, "percent")) {
+          taxonomy_context_label <- if (is.na(filtered_taxon)) {
+            "global"
+          } else {
+            paste0(filtered_taxon, "@", filtered_taxon_rank)
+          }
           plot_data <- add_global_taxonomy_percent_metadata(
             plot_data = plot_data,
             sqm_object = sqm_object,
             rank = rank,
-            selected_samples = selected_samples
+            selected_samples = selected_samples,
+            context_label = taxonomy_context_label
           )
         }
       }

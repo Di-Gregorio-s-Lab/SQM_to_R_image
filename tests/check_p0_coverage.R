@@ -22,6 +22,7 @@ target_functions <- c(
   "pathview_is_exportable",
   "resolve_taxa_filters",
   "subset_sqm_by_taxon",
+  "resolve_effective_taxonomy_exclusions",
   "add_global_taxonomy_percent_metadata",
   "build_pathway_taxonomy_percent_table",
   "make_pathway_taxonomy_percent_plot"

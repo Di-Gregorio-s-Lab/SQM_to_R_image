@@ -116,8 +116,14 @@ global_data <- script_env$add_global_taxonomy_percent_metadata(
 s13_sum <- unique(global_data$displayed_percent_sum[global_data$sample == "S13_1_8"])
 stopifnot(length(s13_sum) == 1L, abs(s13_sum - 21.18628) <= 1e-5)
 stopifnot(all(abs(
-  global_data$displayed_percent_sum + global_data$excluded_percent - 100
+  global_data$displayed_percent_sum + global_data$excluded_percent -
+    global_data$raw_percent_sum
 ) <= 1e-6))
+stopifnot(all(abs(
+  global_data$accounted_percent_sum - global_data$raw_percent_sum
+) <= 1e-6))
+stopifnot(all(global_data$effective_excluded_categories == "Unmapped;Unclassified"))
+stopifnot(all(is.na(global_data$retained_requested_categories)))
 
 message(
   "PASS: P0 integration checks completed | Bacillota ORFs=",

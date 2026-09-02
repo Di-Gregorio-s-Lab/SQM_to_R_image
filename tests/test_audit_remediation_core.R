@@ -84,9 +84,15 @@ stopifnot(all(annotated$denominator_value == 1000))
 stopifnot(all(abs(annotated$displayed_percent_sum - 21.18628) < 1e-8))
 stopifnot(all(abs(annotated$excluded_percent - 78.81372) < 1e-8))
 stopifnot(all(annotated$excluded_categories == "Unmapped;Unclassified"))
+stopifnot(all(annotated$requested_excluded_categories == "Unmapped;Unclassified"))
+stopifnot(all(annotated$effective_excluded_categories == "Unmapped;Unclassified"))
+stopifnot(all(is.na(annotated$retained_requested_categories)))
+stopifnot(all(annotated$exclusion_resolution_status == "matched_requested"))
 stopifnot(all(abs(
-  annotated$displayed_percent_sum + annotated$excluded_percent - 100
+  annotated$displayed_percent_sum + annotated$excluded_percent -
+    annotated$raw_percent_sum
 ) < 1e-8))
+stopifnot(all(abs(annotated$accounted_percent_sum - annotated$raw_percent_sum) < 1e-8))
 
 manifest_row <- script_env$new_manifest_row(
   script_name = "sqm_plots.R",

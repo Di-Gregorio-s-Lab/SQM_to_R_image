@@ -139,7 +139,7 @@ viene registrato nel manifest di corsa.
 
 | Verifica | Esito |
 |---|---|
-| Suite rapida | PASS, 22 file di test R su 22 |
+| Suite rapida | PASS, 23 file di test R su 23 |
 | Gate di copertura P0-P3 | PASS; tutte le funzioni mirate almeno all'80% |
 | Copertura globale informativa P3 | 20,66% |
 | Integrazione P0 reale | PASS; Bacillota = 88.258 ORF esatte |
@@ -227,10 +227,47 @@ approvate, implementate e documentate con provenienza verificabile.
 - Gli output storici non vengono approvati retroattivamente. Per una nuova analisi si
   devono usare gli artefatti e i manifest identificati dal nuovo `run_id`.
 
+## Addendum — 2026-09-02: esclusioni effettive nella taxonomy globale
+
+Una corsa reale sul progetto CS8 ha mostrato un caso non presente in `Au_sip`:
+al rango `genus`, SQMtools 1.7.2 ha mantenuto la riga generica `Unclassified`
+nei dati visualizzati, collassandola in `Other`, nonostante
+`ignore_unclassified=TRUE`. Il controllo locale sommava quella quota una
+seconda volta come esclusa e interrompeva correttamente la corsa perché il
+metadato dichiarato non coincideva con il grafico.
+
+`plotTaxonomy()` non è stato modificato. Il controllo ora riconcilia, su tutti
+i campioni insieme, la differenza fra totale grezzo della matrice e somma
+mostrata con le combinazioni delle esclusioni richieste. Nel caso CS8/genus
+l'esclusione effettiva è `Unmapped`, mentre `Unclassified` viene registrata
+come trattenuta e genera un warning. Differenze senza spiegazione univoca
+restano bloccanti.
+
+La nuova invariante è:
+
+```text
+displayed_percent_sum + excluded_percent = raw_percent_sum
+```
+
+Questo corregge anche i contesti tassonomici non riscalati, nei quali
+`raw_percent_sum` rappresenta la quota del subset sulla libreria originale e
+può quindi essere inferiore a 100.
+
+Verifiche dell'addendum:
+
+- regressione sintetica dedicata: PASS per esclusione parziale, completa,
+  assente/zero, contesto non riscalato, perdita inspiegabile e ambiguità;
+- gate P0: `resolve_effective_taxonomy_exclusions` 94,74% e
+  `add_global_taxonomy_percent_metadata` 82,86%;
+- integrazione `Au_sip`: PASS, inclusa l'identità del plot SQMtools;
+- probe reale CS8/genus: PASS, plot invariato, esclusione effettiva `Unmapped`,
+  `Unclassified` trattenuta ed errore massimo di riconciliazione `1,42e-14`.
+
 ## Conclusione
 
 Il contratto richiesto è implementato e verificato: Pathview dichiara e usa TPM
 lineari con colori nativi, i taxa minimi e i pathway vuoti non bloccano più l'intera
 analisi, l'ordine dei campioni è esplicito e ogni corsa possiede file e manifest
-separati. Non restano attività del piano corrente oltre al refactoring del monolite,
-che rimane intenzionalmente fuori perimetro.
+separati. L'addendum del 2 settembre rende inoltre veritiera la provenienza delle
+percentuali globali senza modificare il comportamento nativo di `plotTaxonomy()`.
+Resta fuori perimetro soltanto il refactoring del monolite.

@@ -386,8 +386,19 @@ TAXON esegue due analisi distinte.
 
 Usa `SQMtools::plotTaxonomy()` sul progetto o sul contesto tassonomico
 selezionato. I conteggi `abund` e `percent` restano quelli definiti da
-SQMtools. Nel flusso principale, `Unmapped` e `Unclassified` vengono ignorati
-nella vista globale.
+SQMtools. Il flusso principale richiede di ignorare `Unmapped` e
+`Unclassified`, ma non modifica il risultato nativo: SQMtools 1.7.2 può
+mantenere una categoria richiesta dentro i dati mostrati, eventualmente
+collassata in `Other`, quando non compare come riga distinta nella selezione
+Top N.
+
+Per `percent`, il TSV registra separatamente esclusioni richieste, effettive e
+trattenute. La somma mostrata più la quota realmente esclusa deve coincidere
+con `raw_percent_sum`, cioè il totale della matrice percentuale del contesto.
+Questo totale è 100 nel progetto completo, ma può essere inferiore nei subset
+tassonomici non riscalati. Una categoria positiva richiesta ma trattenuta
+produce un warning registrato nel manifest di corsa; una differenza non
+riconciliabile o ambigua interrompe invece l'esecuzione.
 
 ```text
 taxonomy_global/<abund|percent>/<rango>/
@@ -634,6 +645,7 @@ umana.
 | `build_flow_legend_spec()` | Produce da un'unica tabella le etichette percentuali Taxonomy e Function KO/EC usate da entrambi i formati. |
 | `make_flow_plot()`, `make_flow_sankey()` | Rappresentano la stessa tabella e le stesse etichette come PNG alluvial o Sankey HTML. |
 | `make_taxonomy_plot()`, `extract_taxonomy_plot_data()` | Delegano la tassonomia generale a SQMtools e recuperano la tabella realmente usata dal grafico. |
+| `resolve_effective_taxonomy_exclusions()`, `add_global_taxonomy_percent_metadata()` | Riconciliano il totale grezzo con esclusioni realmente applicate da SQMtools e aggiungono provenienza e warning senza modificare il plot. |
 | `build_pathway_taxonomy_percent_table()`, `make_pathway_taxonomy_percent_plot()` | Ricalcolano la tassonomia percentuale del pathway sugli ORF TPM e mantengono i campioni vuoti sull'asse. |
 | `build_pie_chart_table()`, `make_pie_plot()` | Producono una tabella PIE autosufficiente e costruiscono tutte le annotazioni esclusivamente da essa. |
 

@@ -138,6 +138,68 @@ add_global_taxonomy_percent_metadata(
   "phylum",
   "S_positive"
 )
+
+retained_exclusion_sqm <- list(
+  total_reads = c(S_positive = 100),
+  taxa = list(phylum = list(percent = matrix(
+    c(70, 10, 20),
+    ncol = 1L,
+    dimnames = list(c("Unmapped", "Unclassified", "Alpha"), "S_positive")
+  )))
+)
+suppressWarnings(add_global_taxonomy_percent_metadata(
+  tibble::tibble(
+    sample = c("S_positive", "S_positive"),
+    taxon = c("Alpha", "Other"),
+    value = c(20, 10),
+    count = "percent"
+  ),
+  retained_exclusion_sqm,
+  "phylum",
+  "S_positive"
+))
+
+try(
+  resolve_effective_taxonomy_exclusions(
+    percent_frame = as.data.frame(
+      retained_exclusion_sqm$taxa$phylum$percent,
+      check.names = FALSE
+    ),
+    displayed_percent_sum = c(S_positive = 25),
+    selected_samples = "S_positive"
+  ),
+  silent = TRUE
+)
+
+ambiguous_exclusion_sqm <- retained_exclusion_sqm
+ambiguous_exclusion_sqm$taxa$phylum$percent <- matrix(
+  c(10, 10, 80),
+  ncol = 1L,
+  dimnames = list(c("Unmapped", "Unclassified", "Alpha"), "S_positive")
+)
+try(
+  resolve_effective_taxonomy_exclusions(
+    percent_frame = as.data.frame(
+      ambiguous_exclusion_sqm$taxa$phylum$percent,
+      check.names = FALSE
+    ),
+    displayed_percent_sum = c(S_positive = 90),
+    selected_samples = "S_positive"
+  ),
+  silent = TRUE
+)
+
+try(
+  resolve_effective_taxonomy_exclusions(
+    percent_frame = as.data.frame(
+      no_exclusion_sqm$taxa$phylum$percent,
+      check.names = FALSE
+    ),
+    displayed_percent_sum = c(S_positive = 101),
+    selected_samples = "S_positive"
+  ),
+  silent = TRUE
+)
 try(
   add_global_taxonomy_percent_metadata(
     global_plot_data |> dplyr::select(-.data$count),

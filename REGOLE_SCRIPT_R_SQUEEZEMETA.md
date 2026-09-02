@@ -236,7 +236,8 @@ Quando più campioni sono mostrati nello stesso grafico:
 
 Per un grafico relativo a un solo campione, la stessa procedura si applica a
 quel campione. `Unclassified` è una categoria informativa distinta e non deve
-essere rinominata automaticamente in `Other`.
+essere rinominata automaticamente in `Other`, salvo l'eccezione nativa e
+tracciata di `taxonomy_global` descritta nella sezione 6.2.
 
 ### 6.2 Denominatori
 
@@ -259,11 +260,20 @@ attese sommino a 100 per ciascun gruppo pertinente.
 
 Eccezione esplicita: `taxonomy_global/percent` prodotto da
 `SQMtools::plotTaxonomy()` mantiene il comportamento nativo non riscalato con
-`ignore_unmapped=TRUE` e `ignore_unclassified=TRUE`. Le barre rappresentano
-quote della libreria totale e possono quindi sommare a meno di 100. Il TSV
-deve riportare `denominator_type`, `denominator_value`, la somma mostrata, la
-quota esclusa e i nomi delle categorie escluse; la verifica pertinente è
-`displayed_percent_sum + excluded_percent = 100` per campione.
+`ignore_unmapped=TRUE` e `ignore_unclassified=TRUE`, senza riscrivere il plot o
+la selezione Top N di SQMtools. In SQMtools 1.7.2 una categoria richiesta come
+esclusa può restare nei dati mostrati, eventualmente dentro `Other`, se non è
+selezionata come riga distinta prima del filtro. Inoltre, nei contesti filtrati
+senza riscalatura la matrice percentuale può sommare a meno di 100.
+
+Il TSV deve quindi distinguere categorie richieste, effettivamente escluse e
+trattenute; deve riportare `raw_percent_sum`, `displayed_percent_sum`,
+`excluded_percent`, `accounted_percent_sum`, `denominator_type` e
+`denominator_value`. La verifica pertinente è
+`displayed_percent_sum + excluded_percent = raw_percent_sum` per campione.
+Quando una categoria positiva richiesta come esclusa resta nei dati mostrati,
+lo script emette un warning e prosegue soltanto se la massa è riconciliata in
+modo univoco. Differenze inspiegabili o ambigue restano errori bloccanti.
 
 ## 7. Output e tracciabilità
 
