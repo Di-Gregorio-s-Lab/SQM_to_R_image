@@ -134,3 +134,15 @@ empty_result <- tryCatch(
 stopifnot(!inherits(empty_result, "error"))
 stopifnot(nrow(empty_result$pathview) == 2L)
 message("PASS: Pathview skips unavailable pathway output without aborting")
+
+flow_palettes <- script_env$build_flow_palettes(
+  c("Bacteria", "Archaea", "Other"),
+  c("K00001", "K00002", "Other")
+)
+stopifnot(!anyDuplicated(c(
+  unname(flow_palettes$taxonomy[ names(flow_palettes$taxonomy) != "Other"]),
+  unname(flow_palettes$functional[ names(flow_palettes$functional) != "Other"])
+)))
+stopifnot(identical(unname(flow_palettes$taxonomy["Other"]), "grey70"))
+stopifnot(identical(unname(flow_palettes$functional["Other"]), "grey70"))
+message("PASS: Flow palettes are sequential and non-overlapping")
