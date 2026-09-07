@@ -67,14 +67,14 @@ prepared <- script_env$prepare_context_pathway_subsets(
   )),
   context_label = "synthetic",
   subset_fun = function(SQM, ...) SQM,
-  include_flow_oracle = TRUE,
+  include_kegg_oracle = TRUE,
   pathway_ko_resolver = function(pathway_id) c("K00001", "K00002")
 )
 pathway_analysis <- script_env$build_pathway_analysis(
   prepared$pathway_sqms[[1L]],
   "S1"
 )
-flow_input <- pathway_analysis$flow_orf_long_result
+flow_input <- pathway_analysis$orf_long_result
 
 flow_rank <- script_env$build_flow_table_for_rank(
   orf_long = flow_input$data,
@@ -108,7 +108,7 @@ t1_expect_equal(
   tolerance = 1e-12
 )
 
-empty_flow <- script_env$build_flow_orf_long_result(
+empty_flow <- script_env$build_pathway_ko_result(
   context_sqm = sqm,
   selected_samples = "S1",
   pathway_ko_ids = character()

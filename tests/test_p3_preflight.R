@@ -92,8 +92,18 @@ run_case("required packages are selected from mode and FLOW format", {
   )
   expect_package_set(
     required_packages("pie", "png"),
-    c(common, "forcats", "rlang"),
+    c(common, "forcats", "rlang", "pathview"),
     "PIE package selection is incomplete"
+  )
+  expect_package_set(
+    required_packages("funz", "png"),
+    c(common, "pathview"),
+    "FUNZ package selection is incomplete"
+  )
+  expect_package_set(
+    required_packages("taxon", "png"),
+    c(common, "pathview"),
+    "Pathway taxonomy package selection is incomplete"
   )
   expect_package_set(
     required_packages("pathview", "png"),

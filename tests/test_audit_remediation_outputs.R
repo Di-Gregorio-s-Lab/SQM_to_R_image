@@ -184,6 +184,22 @@ run_case("zero-signal enzymes have status TSV but no PNG", {
         row.names = c("orf_a", "orf_b"),
         check.names = FALSE
       )
+    ),
+    functions = list(
+      KEGG = list(
+        tpm = data.frame(
+          S0 = c(10, 20),
+          S1 = c(30, 40),
+          row.names = c("K00001", "K00002"),
+          check.names = FALSE
+        )
+      )
+    ),
+    misc = list(
+      KEGG_names = c(
+        K00001 = "Observed [EC:1.1.1.1]",
+        K00002 = "Other [EC:9.9.9.9]"
+      )
     )
   )
   result <- suppressWarnings(script_env$run_enzyme_mode(

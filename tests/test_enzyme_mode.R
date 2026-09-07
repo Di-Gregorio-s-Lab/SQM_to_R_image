@@ -57,6 +57,25 @@ fake_sqm <- list(
       S1 = c(20, 0, 4, 100),
       row.names = c("orf_a", "orf_b", "orf_c", "orf_d")
     )
+  ),
+  functions = list(
+    KEGG = list(
+      tpm = data.frame(
+        S0 = c(10, 0, 5, 3, 100),
+        S1 = c(20, 0, 0, 4, 100),
+        row.names = c("K00001", "K00002", "K00003", "K00004", "K00005"),
+        check.names = FALSE
+      )
+    )
+  ),
+  misc = list(
+    KEGG_names = c(
+      K00001 = "Function A [EC:1.14.12.11]",
+      K00002 = "Function A companion",
+      K00003 = "Function B [EC:1.14.12.-]",
+      K00004 = "Function C [EC:1.14.12.11 1.14.12.12]",
+      K00005 = "Function D [EC:1.14.12.99]"
+    )
   )
 )
 

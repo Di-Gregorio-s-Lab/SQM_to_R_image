@@ -91,6 +91,16 @@ fake_pathway_sqm <- list(
       check.names = FALSE
     )
   ),
+  functions = list(
+    KEGG = list(
+      tpm = data.frame(
+        S_positive = c(10, 10, 10),
+        S_second = c(0, 15, 15),
+        row.names = c("K00001", "K00002", "K00003"),
+        check.names = FALSE
+      )
+    )
+  ),
   misc = list(
     KEGG_names = c(
       K00001 = "Mono-KO enzyme",
@@ -429,12 +439,16 @@ run_case("Pathway analysis is built once and reused by every KO mode", {
   )
 })
 
-run_case("multi-KO expansion replicates full TPM for each association", {
-  build_orf_long_result <- require_script_function(
+run_case("canonical multi-KO allocation splits TPM before pathway filtering", {
+  build_pathway_ko_result <- require_script_function(
     script_env,
-    "build_orf_long_result"
+    "build_pathway_ko_result"
   )
-  expanded <- build_orf_long_result(fake_pathway_sqm, selected_samples)$data |>
+  expanded <- build_pathway_ko_result(
+    fake_pathway_sqm,
+    selected_samples,
+    c("K00001", "K00002", "K00003")
+  )$data |>
     dplyr::arrange(.data$orf_id, .data$sample, .data$ko_id)
 
   expected_keys <- c(
@@ -452,13 +466,13 @@ run_case("multi-KO expansion replicates full TPM for each association", {
   )
   expect_identical(
     as.numeric(expanded$tpm),
-    c(10, 20, 20, 30, 30),
-    "A multi-KO ORF did not give its full TPM to every associated KO"
+    c(10, 10, 10, 15, 15),
+    "A multi-KO ORF was not divided equally among its KO associations"
   )
   expect_number(
     sum(expanded$tpm),
-    110,
-    "Expanded KO TPM does not reflect the full-TPM-per-KO policy"
+    60,
+    "Canonical KO allocations do not conserve the original ORF TPM"
   )
   expect_true(
     !"orf_without_ko" %in% expanded$orf_id,
@@ -510,4 +524,4 @@ if (length(failures) > 0L) {
   )
 }
 
-message("PASS: P2 KO expansion reports provenance and replicates full TPM")
+message("PASS: P2 KO expansion reports provenance and canonical multi-KO splitting")

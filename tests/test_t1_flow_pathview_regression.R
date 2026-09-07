@@ -88,7 +88,7 @@ pathway_analysis <- script_env$build_pathway_analysis(
   ),
   selected_samples
 )
-flow_input <- pathway_analysis$flow_orf_long_result
+flow_input <- pathway_analysis$orf_long_result
 flow_table <- script_env$build_flow_table_for_rank(
   orf_long = flow_input$data,
   rank = "phylum",

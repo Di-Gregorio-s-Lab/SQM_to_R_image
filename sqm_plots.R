@@ -23,7 +23,7 @@ required_packages_for_mode <- function(mode, flowplot_formats = c("png", "html")
   if (mode %in% c("all", "pie")) {
     required <- c(required, "forcats", "rlang")
   }
-  if (mode %in% c("all", "flow", "pathview")) {
+  if (mode %in% c("all", "flow", "funz", "pie", "taxon", "pathview")) {
     required <- c(required, "pathview")
   }
   unique(required)
@@ -974,6 +974,61 @@ extract_ec_codes <- function(x) {
   cleaned
 }
 
+extract_ec_ids <- function(x) {
+  ec_groups <- stringr::str_extract_all(as.character(x), "\\[EC:[^]]+\\]")
+  lapply(ec_groups, function(groups) {
+    ec_ids <- stringr::str_extract_all(
+      paste(groups, collapse = " "),
+      "[0-9]+\\.[0-9]+\\.[0-9]+\\.(?:[0-9]+|-)"
+    )[[1L]]
+    sort(unique(as.character(ec_ids)))
+  })
+}
+
+build_ko_metadata <- function(sqm, ko_ids = NULL) {
+  kegg_names <- sqm$misc$KEGG_names
+  if (is.null(kegg_names) || is.null(names(kegg_names))) {
+    stop("SQM KEGG metadata requires a named misc$KEGG_names vector.", call. = FALSE)
+  }
+  if (anyNA(names(kegg_names)) || any(!nzchar(names(kegg_names))) ||
+      anyDuplicated(names(kegg_names)) > 0L) {
+    stop("SQM misc$KEGG_names requires unique, non-empty KO names.", call. = FALSE)
+  }
+
+  if (is.null(ko_ids)) {
+    ko_ids <- names(kegg_names)
+  } else {
+    ko_ids <- unique(as.character(ko_ids))
+  }
+  labels <- unname(as.character(kegg_names[ko_ids]))
+  labels[is.na(labels) | !nzchar(trimws(labels))] <- ko_ids[
+    is.na(labels) | !nzchar(trimws(labels))
+  ]
+  ec_lists <- extract_ec_ids(labels)
+
+  tibble::tibble(
+    ko_id = ko_ids,
+    kegg_function = labels,
+    ec_codes = vapply(
+      ec_lists,
+      function(ec_ids) {
+        if (length(ec_ids) == 0L) NA_character_ else paste(ec_ids, collapse = ";")
+      },
+      character(1)
+    )
+  )
+}
+
+build_ko_ec_map <- function(sqm, ko_ids = NULL) {
+  metadata <- build_ko_metadata(sqm, ko_ids)
+  metadata |>
+    mutate(ec_code = extract_ec_ids(.data$kegg_function)) |>
+    tidyr::unnest_longer("ec_code") |>
+    filter(!is.na(.data$ec_code) & nzchar(.data$ec_code)) |>
+    select("ko_id", "ec_code") |>
+    distinct()
+}
+
 normalize_taxon_value <- function(x) {
   x <- as.character(x)
   empty <- is.na(x) | !nzchar(trimws(x))
@@ -1277,6 +1332,101 @@ pathway_id_for_name <- function(pathway_name) {
   }
 }
 
+normalize_kegg_pathway_name <- function(pathway_name) {
+  pathway_name <- as.character(pathway_name)
+  pathway_name <- sub(
+    "\\s*-\\s*Reference pathway\\s*$",
+    "",
+    pathway_name,
+    ignore.case = TRUE
+  )
+  tolower(trimws(gsub("\\s+", " ", pathway_name)))
+}
+
+parse_kegg_pathway_catalog <- function(lines) {
+  lines <- as.character(lines)
+  fields <- strsplit(lines, "\t", fixed = TRUE)
+  valid <- lengths(fields) >= 2L
+  if (!any(valid)) {
+    stop("KEGG pathway catalog is empty or malformed.", call. = FALSE)
+  }
+  fields <- fields[valid]
+  catalog <- tibble::tibble(
+    pathway_id = sub("^(?:path:)?ko", "", vapply(fields, `[[`, character(1), 1L)),
+    pathway_name = vapply(fields, `[[`, character(1), 2L)
+  ) |>
+    filter(grepl("^[0-9]{5}$", .data$pathway_id)) |>
+    mutate(normalized_name = normalize_kegg_pathway_name(.data$pathway_name)) |>
+    distinct(.data$pathway_id, .data$normalized_name, .keep_all = TRUE)
+  if (nrow(catalog) == 0L) {
+    stop("KEGG pathway catalog contains no valid ko pathway entries.", call. = FALSE)
+  }
+  catalog
+}
+
+download_kegg_pathway_catalog <- function(
+    endpoint = "https://rest.kegg.jp/list/pathway/ko") {
+  connection <- NULL
+  lines <- tryCatch({
+    connection <- url(endpoint, open = "rb")
+    on.exit(close(connection), add = TRUE)
+    readLines(connection, warn = FALSE, encoding = "UTF-8")
+  }, error = function(error) {
+    stop(
+      "Unable to download the KEGG pathway catalog from ", endpoint,
+      ": ", conditionMessage(error),
+      call. = FALSE
+    )
+  })
+  parse_kegg_pathway_catalog(lines)
+}
+
+resolve_pathway_id_from_catalog <- function(pathway_name, catalog) {
+  required_columns <- c("pathway_id", "normalized_name")
+  missing_columns <- setdiff(required_columns, colnames(catalog))
+  if (length(missing_columns) > 0L) {
+    stop(
+      "KEGG pathway catalog is missing columns: ",
+      paste(missing_columns, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  normalized_name <- normalize_kegg_pathway_name(pathway_name)
+  matches <- catalog |>
+    filter(.data$normalized_name == .env$normalized_name) |>
+    distinct(.data$pathway_id)
+  if (nrow(matches) == 0L) {
+    stop(
+      "KEGG pathway name could not be resolved to an ID: ", pathway_name,
+      call. = FALSE
+    )
+  }
+  if (nrow(matches) > 1L) {
+    stop(
+      "KEGG pathway name maps ambiguously to IDs ",
+      paste(matches$pathway_id, collapse = ", "),
+      ": ", pathway_name,
+      call. = FALSE
+    )
+  }
+  matches$pathway_id[[1L]]
+}
+
+resolve_kegg_pathway_id <- local({
+  catalog <- NULL
+
+  function(pathway_name, catalog_loader = download_kegg_pathway_catalog) {
+    curated_id <- pathway_id_for_name(pathway_name)
+    if (!is.na(curated_id)) {
+      return(curated_id)
+    }
+    if (is.null(catalog)) {
+      catalog <<- catalog_loader()
+    }
+    resolve_pathway_id_from_catalog(pathway_name, catalog)
+  }
+})
+
 # Rank pathways by total TPM across the selected samples for `top20` mode.
 select_top_pathways <- function(sqm, selected_samples, pathway_top_n = default_pathway_top_n) {
   validate_positive_integer(pathway_top_n, "pathway_top_n")
@@ -1494,7 +1644,7 @@ validate_sqm_tpm_inputs <- function(
   if (isTRUE(require_kegg_tpm)) {
     kegg_tpm <- sqm$functions$KEGG$tpm
     if (is.null(kegg_tpm)) {
-      stop("sqm$functions$KEGG$tpm is required for Pathview.", call. = FALSE)
+      stop("sqm$functions$KEGG$tpm is required for KEGG plot data.", call. = FALSE)
     }
     validate_samples(selected_samples, colnames(kegg_tpm))
     validate_tpm_matrix(
@@ -1583,8 +1733,10 @@ prepare_context_pathway_subsets <- function(
     pathway_entries,
     context_label,
     subset_fun = SQMtools::subsetFun,
-    include_flow_oracle = FALSE,
-    pathway_ko_resolver = resolve_pathway_ko_ids) {
+    include_kegg_oracle = FALSE,
+    pathway_ko_resolver = resolve_pathway_ko_ids,
+    pathway_id_resolver = resolve_kegg_pathway_id,
+    selected_samples = colnames(context_sqm$orfs$tpm)) {
   pathway_sqms <- list()
   skips <- tibble::tibble(
     context = character(),
@@ -1593,14 +1745,18 @@ prepare_context_pathway_subsets <- function(
   )
 
   for (pathway_info in pathway_entries) {
+    if (is.na(pathway_info$pathway_id) ||
+        !grepl("^[0-9]{5}$", pathway_info$pathway_id)) {
+      pathway_info$pathway_id <- pathway_id_resolver(pathway_info$pathway_name)
+    }
     pathway_ko_ids <- NULL
-    if (isTRUE(include_flow_oracle)) {
+    if (isTRUE(include_kegg_oracle)) {
       if (!pathview_is_exportable(
           pathway_info$pathway_selection,
           pathway_info$pathway_id
       )) {
         stop(
-          "FLOW requires a resolvable KEGG pathway ID for '",
+          "KEGG pathway analysis requires a resolvable pathway ID for '",
           pathway_info$pathway_name,
           "'.",
           call. = FALSE
@@ -1616,15 +1772,47 @@ prepare_context_pathway_subsets <- function(
           ").",
           call. = FALSE
         )
+        skips <- bind_rows(
+          skips,
+          tibble::tibble(
+            context = as.character(context_label),
+            pathway = pathway_info$pathway_name,
+            reason = "no_ortholog_nodes"
+          )
+        )
+        next
       }
     }
 
-    pathway_sqm <- subset_pathway(
-      context_sqm,
-      pathway_info$pathway_name,
-      subset_fun = subset_fun
-    )
+    pathway_sqm <- if (isTRUE(include_kegg_oracle)) {
+      subset_orfs_by_ko_membership(context_sqm, pathway_ko_ids)
+    } else {
+      subset_pathway(
+        context_sqm,
+        pathway_info$pathway_name,
+        subset_fun = subset_fun
+      )
+    }
     if (is_empty_pathway_subset(pathway_sqm)) {
+      if (isTRUE(include_kegg_oracle)) {
+        kegg_tpm <- as.data.frame(
+          context_sqm$functions$KEGG$tpm,
+          check.names = FALSE
+        )
+        available_ko_ids <- intersect(pathway_ko_ids, rownames(kegg_tpm))
+        if (length(available_ko_ids) > 0L &&
+            any(as.matrix(kegg_tpm[
+              available_ko_ids,
+              selected_samples,
+              drop = FALSE
+            ]) > 0)) {
+          stop(
+            "Cannot allocate positive official SQM KEGG TPM without ORFs for pathway ",
+            pathway_info$pathway_id, " (", pathway_info$pathway_name, ").",
+            call. = FALSE
+          )
+        }
+      }
       warning(
         "Skipping empty context x pathway combination: context=", context_label,
         " | pathway=", pathway_info$pathway_name,
@@ -1635,7 +1823,7 @@ prepare_context_pathway_subsets <- function(
         tibble::tibble(
           context = as.character(context_label),
           pathway = pathway_info$pathway_name,
-          reason = "empty_subset"
+          reason = if (isTRUE(include_kegg_oracle)) "empty_ko_subset" else "empty_subset"
         )
       )
       next
@@ -1737,6 +1925,81 @@ subset_sqm_by_taxon <- function(
   subset_sqm
 }
 
+select_orf_ids_by_ko <- function(sqm, ko_ids) {
+  ko_ids <- sort(unique(as.character(ko_ids)))
+  if (length(ko_ids) == 0L) {
+    return(character())
+  }
+  if (anyNA(ko_ids) || any(!grepl("^K[0-9]{5}$", ko_ids))) {
+    stop("Pathway KO IDs must be valid KEGG ortholog IDs.", call. = FALSE)
+  }
+
+  orf_table <- as.data.frame(sqm$orfs$table, check.names = FALSE)
+  if (!"KEGG ID" %in% colnames(orf_table)) {
+    stop("Pathway membership requires the ORF annotation column: KEGG ID", call. = FALSE)
+  }
+  if (is.null(rownames(orf_table)) || anyDuplicated(rownames(orf_table)) > 0L) {
+    stop("Pathway membership requires unique ORF row names.", call. = FALSE)
+  }
+
+  orf_ko_ids <- lapply(as.character(orf_table[["KEGG ID"]]), extract_ko_ids)
+  keep <- vapply(
+    orf_ko_ids,
+    function(orf_kos) any(orf_kos %in% ko_ids),
+    logical(1)
+  )
+  rownames(orf_table)[keep]
+}
+
+subset_sqm_by_orf_ids <- function(
+    sqm,
+    orf_ids,
+    subset_orfs_fn = SQMtools::subsetORFs) {
+  orf_ids <- unique(as.character(orf_ids))
+  if (length(orf_ids) == 0L || anyNA(orf_ids)) {
+    stop("ORF subsetting requires a non-empty set of ORF IDs.", call. = FALSE)
+  }
+
+  available_ids <- rownames(sqm$orfs$table)
+  missing_ids <- setdiff(orf_ids, available_ids)
+  if (length(missing_ids) > 0L) {
+    stop(
+      "ORF subset contains IDs absent from sqm$orfs$table: ",
+      paste(missing_ids, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  if (inherits(sqm, "SQM")) {
+    subset_sqm <- subset_orfs_fn(
+      SQM = sqm,
+      orfs = orf_ids,
+      tax_source = "orfs",
+      trusted_functions_only = FALSE,
+      ignore_unclassified_functions = FALSE,
+      rescale_tpm = FALSE,
+      rescale_copy_number = FALSE,
+      recalculate_bin_stats = FALSE,
+      contigs_override = NULL,
+      allow_empty = FALSE
+    )
+  } else {
+    subset_sqm <- sqm
+    for (component_name in names(subset_sqm$orfs)) {
+      component <- subset_sqm$orfs[[component_name]]
+      component_ids <- rownames(component)
+      if (!is.null(component_ids) && all(orf_ids %in% component_ids)) {
+        subset_sqm$orfs[[component_name]] <- component[orf_ids, , drop = FALSE]
+      }
+    }
+  }
+
+  if (!identical(rownames(subset_sqm$orfs$table), orf_ids)) {
+    stop("ORF subset postcondition failed: requested and returned IDs differ.", call. = FALSE)
+  }
+  subset_sqm
+}
+
 build_ko_expansion_audit <- function(orf_table) {
   if (!"KEGG ID" %in% colnames(orf_table)) {
     stop("KO expansion audit requires column: KEGG ID", call. = FALSE)
@@ -1753,9 +2016,9 @@ build_ko_expansion_audit <- function(orf_table) {
   )
 }
 
-# Build the canonical ORF × sample × KO table and its pre-expansion audit.
-# Every KO associated with an ORF receives the ORF's full TPM. Percentages
-# therefore use the expanded ORF × sample × KO table as their denominator.
+# Expand the raw ORF × sample × KO associations before canonical allocation.
+# build_pathway_ko_result() divides each ORF TPM by its complete KO count,
+# filters to KGML membership, then aligns each KO to the official SQM margin.
 build_orf_long_result <- function(pathway_sqm, selected_samples) {
   orf_table <- as.data.frame(pathway_sqm$orfs$table, check.names = FALSE) |>
     tibble::rownames_to_column("orf_id")
@@ -1788,15 +2051,27 @@ build_orf_long_result <- function(pathway_sqm, selected_samples) {
 
   fun_lookup <- sqm_misc_names <- pathway_sqm$misc$KEGG_names
 
-  annotations <- orf_table |>
-    transmute(
-      orf_id = .data$orf_id,
-      `KEGG ID` = as.character(.data[["KEGG ID"]]),
-      kegg_function_raw = as.character(.data[["KEGGFUN"]]),
-      ec_codes = extract_ec_codes(.data[["KEGGFUN"]]),
-      KEGGPATH = as.character(.data[["KEGGPATH"]]),
-      ko_ids = map(as.character(.data[["KEGG ID"]]), extract_ko_ids)
-    )
+  if (!"KEGG ID" %in% colnames(orf_table)) {
+    stop("ORF KO allocation requires column: KEGG ID", call. = FALSE)
+  }
+  keggfun_values <- if ("KEGGFUN" %in% colnames(orf_table)) {
+    as.character(orf_table[["KEGGFUN"]])
+  } else {
+    rep(NA_character_, nrow(orf_table))
+  }
+  keggpath_values <- if ("KEGGPATH" %in% colnames(orf_table)) {
+    as.character(orf_table[["KEGGPATH"]])
+  } else {
+    rep(NA_character_, nrow(orf_table))
+  }
+  annotations <- tibble::tibble(
+    orf_id = orf_table$orf_id,
+    `KEGG ID` = as.character(orf_table[["KEGG ID"]]),
+    kegg_function_raw = keggfun_values,
+    ec_codes = extract_ec_codes(keggfun_values),
+    KEGGPATH = keggpath_values,
+    ko_ids = map(as.character(orf_table[["KEGG ID"]]), extract_ko_ids)
+  )
 
   ko_audit <- build_ko_expansion_audit(orf_table)
 
@@ -1897,7 +2172,7 @@ download_pathway_node_data <- function(
   pathway_id <- as.character(pathway_id)
   if (length(pathway_id) != 1L || is.na(pathway_id) ||
       !grepl("^[0-9]{5}$", pathway_id)) {
-    stop("FLOW pathway mapping requires a five-digit KEGG pathway ID.", call. = FALSE)
+    stop("KEGG pathway mapping requires a five-digit pathway ID.", call. = FALSE)
   }
 
   download_dir <- tempfile(paste0("sqm_flow_ko", pathway_id, "_"))
@@ -1929,7 +2204,7 @@ resolve_pathway_ko_ids <- local({
     pathway_id <- as.character(pathway_id)
     if (length(pathway_id) != 1L || is.na(pathway_id) ||
         !grepl("^[0-9]{5}$", pathway_id)) {
-      stop("FLOW pathway mapping requires a five-digit KEGG pathway ID.", call. = FALSE)
+      stop("KEGG pathway mapping requires a five-digit pathway ID.", call. = FALSE)
     }
 
     if (!exists(pathway_id, envir = cache, inherits = FALSE)) {
@@ -1940,10 +2215,10 @@ resolve_pathway_ko_ids <- local({
   }
 })
 
-subset_flow_orfs_by_ko <- function(context_sqm, pathway_ko_ids) {
+subset_orfs_by_ko_membership <- function(context_sqm, pathway_ko_ids) {
   orf_table <- as.data.frame(context_sqm$orfs$table, check.names = FALSE)
   if (!"KEGG ID" %in% colnames(orf_table)) {
-    stop("FLOW requires the ORF annotation column: KEGG ID", call. = FALSE)
+    stop("KO membership requires the ORF annotation column: KEGG ID", call. = FALSE)
   }
 
   orf_ko_ids <- lapply(as.character(orf_table[["KEGG ID"]]), extract_ko_ids)
@@ -1954,29 +2229,29 @@ subset_flow_orfs_by_ko <- function(context_sqm, pathway_ko_ids) {
   )
   selected_orf_ids <- rownames(orf_table)[keep]
 
-  flow_sqm <- context_sqm
-  flow_sqm$orfs$table <- context_sqm$orfs$table[
+  pathway_sqm <- context_sqm
+  pathway_sqm$orfs$table <- context_sqm$orfs$table[
     selected_orf_ids,
     ,
     drop = FALSE
   ]
-  flow_sqm$orfs$tax <- context_sqm$orfs$tax[
+  pathway_sqm$orfs$tax <- context_sqm$orfs$tax[
     selected_orf_ids,
     ,
     drop = FALSE
   ]
-  flow_sqm$orfs$tpm <- context_sqm$orfs$tpm[
+  pathway_sqm$orfs$tpm <- context_sqm$orfs$tpm[
     selected_orf_ids,
     ,
     drop = FALSE
   ]
-  flow_sqm
+  pathway_sqm
 }
 
 # Reproduce SQMtools KEGG aggregation for taxonomic allocation while keeping
 # SQM$functions$KEGG$tpm as the authoritative functional margin. SQMtools
 # divides an ORF equally among all of its KO annotations before aggregation.
-build_flow_orf_long_result <- function(
+build_pathway_ko_result <- function(
     context_sqm,
     selected_samples,
     pathway_ko_ids,
@@ -1984,52 +2259,108 @@ build_flow_orf_long_result <- function(
   pathway_ko_ids <- sort(unique(as.character(pathway_ko_ids)))
   if (anyNA(pathway_ko_ids) ||
       any(!grepl("^K[0-9]{5}$", pathway_ko_ids))) {
-    stop("FLOW pathway KO IDs must be valid KEGG ortholog IDs.", call. = FALSE)
+    stop("Pathway KO IDs must be valid KEGG ortholog IDs.", call. = FALSE)
   }
 
   kegg_tpm <- context_sqm$functions$KEGG$tpm
   if (is.null(kegg_tpm)) {
-    stop("FLOW SQMtools oracle requires SQM$functions$KEGG$tpm.", call. = FALSE)
+    stop("SQMtools oracle requires SQM$functions$KEGG$tpm.", call. = FALSE)
   }
   kegg_tpm <- as.data.frame(kegg_tpm, check.names = FALSE)
+  if (is.null(rownames(kegg_tpm)) || anyDuplicated(rownames(kegg_tpm)) > 0L ||
+      any(!nzchar(rownames(kegg_tpm)))) {
+    stop("SQM$functions$KEGG$tpm requires unique, non-empty KO row names.", call. = FALSE)
+  }
   validate_samples(selected_samples, colnames(kegg_tpm))
   validate_tpm_matrix(kegg_tpm[selected_samples], "SQM$functions$KEGG$tpm")
 
   available_ko_ids <- intersect(pathway_ko_ids, rownames(kegg_tpm))
-  flow_sqm <- subset_flow_orfs_by_ko(context_sqm, available_ko_ids)
-  full_result <- build_orf_long_result(flow_sqm, selected_samples)
-  if (length(available_ko_ids) == 0L) {
+  pathway_orf_ids <- select_orf_ids_by_ko(context_sqm, pathway_ko_ids)
+  metadata <- build_ko_metadata(context_sqm, pathway_ko_ids)
+  official <- tidyr::expand_grid(
+    ko_id = pathway_ko_ids,
+    sample = as.character(selected_samples)
+  ) |>
+    dplyr::left_join(
+      kegg_tpm[available_ko_ids, selected_samples, drop = FALSE] |>
+        tibble::rownames_to_column("ko_id") |>
+        tidyr::pivot_longer(
+          cols = -all_of("ko_id"),
+          names_to = "sample",
+          values_to = "official_tpm"
+        ) |>
+        dplyr::mutate(
+          ko_id = as.character(.data$ko_id),
+          sample = as.character(.data$sample),
+          official_tpm = as.numeric(.data$official_tpm)
+        ),
+      by = c("ko_id", "sample"),
+      relationship = "one-to-one"
+    ) |>
+    dplyr::mutate(official_tpm = tidyr::replace_na(.data$official_tpm, 0))
+
+  if (length(pathway_orf_ids) == 0L) {
+    if (any(official$official_tpm > tolerance)) {
+      missing_keys <- paste0(
+        official$sample[official$official_tpm > tolerance],
+        "/",
+        official$ko_id[official$official_tpm > tolerance],
+        collapse = ", "
+      )
+      stop(
+        "Cannot allocate positive official SQM KEGG TPM without ORFs: ",
+        missing_keys,
+        call. = FALSE
+      )
+    }
+    empty_sqm <- subset_orfs_by_ko_membership(context_sqm, character())
+    full_result <- build_orf_long_result(empty_sqm, selected_samples)
     return(list(
       data = full_result$data[0, , drop = FALSE],
+      totals = official |>
+        dplyr::rename(tpm = "official_tpm") |>
+        dplyr::left_join(metadata, by = "ko_id", relationship = "many-to-one"),
+      metadata = metadata,
+      orf_ids = character(),
+      pathway_sqm = empty_sqm,
       audit = dplyr::mutate(
-        full_result$audit,
-        multi_ko_policy = "split_tpm_equally_per_ko",
-        ko_denominator_basis = "sqm_functions_kegg_tpm"
+          full_result$audit,
+          multi_ko_policy = "split_tpm_equally_per_ko",
+          ko_denominator_basis = "sqm_functions_kegg_tpm",
+          membership_basis = "kgml_ortholog_nodes",
+          pathway_ko_count = as.integer(length(pathway_ko_ids)),
+          pathway_orf_count = 0L,
+          raw_conservation_max_abs_error = 0,
+          official_margin_max_abs_error = 0
       )
     ))
   }
 
-  allocated <- full_result$data |>
+  pathway_sqm <- subset_sqm_by_orf_ids(context_sqm, pathway_orf_ids)
+  full_result <- build_orf_long_result(pathway_sqm, selected_samples)
+  raw_allocated <- full_result$data |>
     dplyr::group_by(.data$orf_id, .data$sample) |>
     dplyr::mutate(
       ko_count = dplyr::n(),
       allocated_tpm = .data$tpm / .data$ko_count
     ) |>
-    dplyr::ungroup() |>
-    dplyr::filter(.data$ko_id %in% available_ko_ids)
+    dplyr::ungroup()
 
-  official <- kegg_tpm[available_ko_ids, selected_samples, drop = FALSE] |>
-    tibble::rownames_to_column("ko_id") |>
-    tidyr::pivot_longer(
-      cols = -all_of("ko_id"),
-      names_to = "sample",
-      values_to = "official_tpm"
-    ) |>
-    dplyr::mutate(
-      ko_id = as.character(.data$ko_id),
-      sample = as.character(.data$sample),
-      official_tpm = as.numeric(.data$official_tpm)
+  raw_conservation <- raw_allocated |>
+    dplyr::group_by(.data$orf_id, .data$sample) |>
+    dplyr::summarise(
+      original_tpm = dplyr::first(.data$tpm),
+      allocated_tpm = sum(.data$allocated_tpm),
+      .groups = "drop"
     )
+  if (nrow(raw_conservation) > 0L && any(
+    abs(raw_conservation$allocated_tpm - raw_conservation$original_tpm) > tolerance
+  )) {
+    stop("Raw multi-KO allocation failed to conserve ORF TPM.", call. = FALSE)
+  }
+
+  allocated <- raw_allocated |>
+    dplyr::filter(.data$ko_id %in% pathway_ko_ids)
 
   allocated_totals <- allocated |>
     dplyr::group_by(.data$sample, .data$ko_id) |>
@@ -2048,7 +2379,7 @@ build_flow_orf_long_result <- function(
       collapse = ", "
     )
     stop(
-      "FLOW cannot allocate positive official SQM KEGG TPM without ORFs: ",
+      "Cannot allocate positive official SQM KEGG TPM without ORFs: ",
       missing_keys,
       call. = FALSE
     )
@@ -2071,6 +2402,8 @@ build_flow_orf_long_result <- function(
     ) |>
     dplyr::ungroup() |>
     dplyr::filter(.data$tpm > 0) |>
+    dplyr::select(-all_of(c("kegg_function", "ec_codes"))) |>
+    dplyr::left_join(metadata, by = "ko_id", relationship = "many-to-one") |>
     dplyr::select(
       -all_of(c(
         "ko_count", "allocated_tpm", "official_tpm", "allocated_total"
@@ -2084,19 +2417,38 @@ build_flow_orf_long_result <- function(
       official,
       by = c("sample", "ko_id"),
       relationship = "one-to-one"
-    )
+  )
   if (nrow(observed) > 0L &&
       any(abs(observed$flow_tpm - observed$official_tpm) > tolerance)) {
-    stop("FLOW failed to conserve the official SQM KEGG TPM margin.", call. = FALSE)
+    stop("KO allocation failed to conserve the official SQM KEGG TPM margin.", call. = FALSE)
   }
 
   list(
     data = allocated,
+    totals = official |>
+      dplyr::rename(tpm = "official_tpm") |>
+      dplyr::left_join(metadata, by = "ko_id", relationship = "many-to-one"),
+    metadata = metadata,
+    orf_ids = pathway_orf_ids,
+    pathway_sqm = pathway_sqm,
     audit = dplyr::mutate(
-      full_result$audit,
-      multi_ko_policy = "split_tpm_equally_per_ko",
-      ko_denominator_basis = "sqm_functions_kegg_tpm"
-    )
+        full_result$audit,
+        multi_ko_policy = "split_tpm_equally_per_ko",
+        ko_denominator_basis = "sqm_functions_kegg_tpm",
+        membership_basis = "kgml_ortholog_nodes",
+        pathway_ko_count = as.integer(length(pathway_ko_ids)),
+        pathway_orf_count = as.integer(length(pathway_orf_ids)),
+        raw_conservation_max_abs_error = if (nrow(raw_conservation) == 0L) {
+          0
+        } else {
+          max(abs(raw_conservation$allocated_tpm - raw_conservation$original_tpm))
+        },
+        official_margin_max_abs_error = if (nrow(observed) == 0L) {
+          0
+        } else {
+          max(abs(observed$flow_tpm - observed$official_tpm))
+        }
+      )
   )
 }
 
@@ -2163,13 +2515,30 @@ build_pathway_analysis <- function(pathway_info, selected_samples) {
     context_sqm <- pathway_info$pathway_sqm
   }
   pathway_ko_ids <- pathway_info$pathway_ko_ids
-  flow_orf_long_result <- NULL
   if (!is.null(pathway_ko_ids)) {
-    flow_orf_long_result <- build_flow_orf_long_result(
+    orf_long_result <- build_pathway_ko_result(
       context_sqm = context_sqm,
       selected_samples = selected_samples,
       pathway_ko_ids = pathway_ko_ids
     )
+    pathway_sqm <- orf_long_result$pathway_sqm
+  } else {
+    # Compatibility seam for callers that construct analyses without KGML.
+    # Productive pathway modes always populate pathway_ko_ids in preflight.
+    pathway_sqm <- pathway_info$pathway_sqm
+    orf_long_result <- build_orf_long_result(pathway_sqm, selected_samples)
+    orf_long_result$totals <- orf_long_result$data |>
+      group_by(.data$sample, .data$ko_id) |>
+      summarise(
+        tpm = sum(.data$tpm),
+        kegg_function = dplyr::first(.data$kegg_function),
+        ec_codes = dplyr::first(.data$ec_codes),
+        .groups = "drop"
+      )
+    orf_long_result$metadata <- orf_long_result$totals |>
+      select("ko_id", "kegg_function", "ec_codes") |>
+      distinct()
+    orf_long_result$orf_ids <- unique(as.character(orf_long_result$data$orf_id))
   }
 
   pathway_analysis <- structure(
@@ -2177,15 +2546,11 @@ build_pathway_analysis <- function(pathway_info, selected_samples) {
       pathway_name = as.character(pathway_info$pathway_name),
       pathway_id = as.character(pathway_info$pathway_id),
       pathway_selection = as.character(pathway_info$pathway_selection),
-      pathway_sqm = pathway_info$pathway_sqm,
+      pathway_sqm = pathway_sqm,
       context_sqm = context_sqm,
       pathway_ko_ids = pathway_ko_ids,
       selected_samples = selected_samples,
-      orf_long_result = build_orf_long_result(
-        pathway_info$pathway_sqm,
-        selected_samples
-      ),
-      flow_orf_long_result = flow_orf_long_result,
+      orf_long_result = orf_long_result,
       ko_lookup = get_ko_name_lookup(context_sqm)
     ),
     class = c("sqm_pathway_analysis", "list")
@@ -2558,48 +2923,28 @@ split_ec_code_field <- function(ec_codes) {
 
 build_enzyme_plot_table <- function(sqm_object, selected_samples, enzyme_ecs) {
   enzyme_ecs <- normalize_enzyme_ecs(enzyme_ecs)
-  orf_table <- as.data.frame(sqm_object$orfs$table, check.names = FALSE) |>
-    tibble::rownames_to_column("orf_id")
-  tpm_table <- as.data.frame(sqm_object$orfs$tpm, check.names = FALSE) |>
-    tibble::rownames_to_column("orf_id")
-
-  if (anyDuplicated(orf_table$orf_id) > 0L || anyDuplicated(tpm_table$orf_id) > 0L) {
-    stop("orf_id keys must be unique in the ORF and TPM tables.", call. = FALSE)
+  kegg_tpm <- sqm_object$functions$KEGG$tpm
+  if (is.null(kegg_tpm)) {
+    stop("ENZIMI requires SQM$functions$KEGG$tpm.", call. = FALSE)
   }
-  if (!setequal(orf_table$orf_id, tpm_table$orf_id)) {
-    stop("orf_id values do not match between the ORF and TPM tables.", call. = FALSE)
-  }
-  if (!"KEGGFUN" %in% colnames(orf_table)) {
-    stop("The ORF table does not contain the KEGGFUN column.", call. = FALSE)
+  kegg_tpm <- as.data.frame(kegg_tpm, check.names = FALSE)
+  validate_samples(selected_samples, colnames(kegg_tpm))
+  validate_tpm_matrix(kegg_tpm[selected_samples], "SQM$functions$KEGG$tpm")
+  if (is.null(rownames(kegg_tpm)) || anyDuplicated(rownames(kegg_tpm)) > 0L) {
+    stop("SQM$functions$KEGG$tpm requires unique KO row names.", call. = FALSE)
   }
 
-  missing_samples <- setdiff(selected_samples, colnames(tpm_table))
-  if (length(missing_samples) > 0L) {
-    stop(
-      "Samples missing from sqm$orfs$tpm: ", paste(missing_samples, collapse = ", "),
-      call. = FALSE
-    )
-  }
+  matched_ecs <- build_ko_ec_map(sqm_object) |>
+    filter(.data$ec_code %in% enzyme_ecs)
 
-  matched_ecs <- orf_table |>
-    transmute(
-      orf_id = .data$orf_id,
-      ec_codes = extract_ec_codes(.data$KEGGFUN)
-    ) |>
-    filter(!is.na(.data$ec_codes)) |>
-    mutate(ec_code = map(.data$ec_codes, split_ec_code_field)) |>
-    tidyr::unnest_longer("ec_code") |>
-    filter(.data$ec_code %in% enzyme_ecs) |>
-    distinct(.data$orf_id, .data$ec_code)
-
-  tpm_by_enzyme <- tpm_table |>
+  tpm_by_enzyme <- kegg_tpm |>
+    tibble::rownames_to_column("ko_id") |>
     pivot_longer(
-      cols = -all_of("orf_id"),
+      cols = all_of(selected_samples),
       names_to = "sample",
       values_to = "tpm"
     ) |>
-    filter(.data$sample %in% selected_samples) |>
-    inner_join(matched_ecs, by = "orf_id", relationship = "many-to-many") |>
+    inner_join(matched_ecs, by = "ko_id", relationship = "many-to-many") |>
     group_by(.data$sample, .data$ec_code) |>
     summarise(tpm = sum(as.numeric(.data$tpm), na.rm = TRUE), .groups = "drop")
 
@@ -3153,19 +3498,16 @@ make_taxonomy_plot <- function(
     top_n_taxa,
     ignore_unmapped,
     ignore_unclassified) {
-  sqm_subset <- SQMtools::subsetSamples(
-    SQM = sqm_object,
-    samples = selected_samples
-  )
-
   plot_object <- SQMtools::plotTaxonomy(
-    SQM = sqm_subset,
+    SQM = sqm_object,
     rank = rank,
     count = count,
     N = top_n_taxa,
+    samples = selected_samples,
     ignore_unmapped = ignore_unmapped,
     ignore_unclassified = ignore_unclassified,
-    no_partial_classifications = FALSE
+    no_partial_classifications = FALSE,
+    rescale = FALSE
   )
 
   plot_object +
@@ -3851,10 +4193,10 @@ run_funz_mode <- function(
   dir.create(pathway_dir, recursive = TRUE, showWarnings = FALSE)
 
   orf_long_result <- pathway_analysis$orf_long_result
-  orf_long <- orf_long_result$data
+  ko_totals <- orf_long_result$totals
   ko_lookup <- pathway_analysis$ko_lookup
   plot_tbl <- build_ko_plot_table(
-    orf_long = orf_long,
+    orf_long = ko_totals,
     selected_samples = selected_samples,
     top_n_ko = top_n_ko,
     ko_lookup = ko_lookup,
@@ -4174,10 +4516,7 @@ run_flow_mode <- function(
     " | ranks=", paste(taxonomy_ranks, collapse = ","),
     " | samples=", paste(selected_samples, collapse = ",")
   )
-  orf_long_result <- pathway_analysis$flow_orf_long_result
-  if (is.null(orf_long_result)) {
-    orf_long_result <- pathway_analysis$orf_long_result
-  }
+  orf_long_result <- pathway_analysis$orf_long_result
   orf_long <- orf_long_result$data
   if (nrow(orf_long) == 0L) {
     warning("No positive ORF data for pathway ", pathway_name, ".", call. = FALSE)
@@ -4393,46 +4732,33 @@ run_taxonomy_scope <- function(
       }
       dir.create(rank_dir, recursive = TRUE, showWarnings = FALSE)
 
-      use_pathway_tpm_percent <- scope_name != "taxonomy_global" && identical(count, "percent")
-      if (use_pathway_tpm_percent) {
-        plot_data <- build_pathway_taxonomy_percent_table(
-          sqm_object = sqm_object,
-          rank = rank,
-          selected_samples = selected_samples,
-          top_n_taxa = top_n_taxa,
-          pathway_name = pathway_name
-        )
-        plot_object <- make_pathway_taxonomy_percent_plot(
-          plot_tbl = plot_data,
-          pathway_name = pathway_name,
-          rank = rank,
-          selected_samples = selected_samples
-        )
-      } else {
-        plot_object <- make_taxonomy_plot(
-          sqm_object = sqm_object,
-          rank = rank,
-          count = count,
-          selected_samples = selected_samples,
-          top_n_taxa = top_n_taxa,
-          ignore_unmapped = ignore_unmapped,
-          ignore_unclassified = ignore_unclassified
-        )
-        plot_data <- extract_taxonomy_plot_data(plot_object, count)
-        if (scope_name == "taxonomy_global" && identical(count, "percent")) {
-          taxonomy_context_label <- if (is.na(filtered_taxon)) {
-            "global"
-          } else {
-            paste0(filtered_taxon, "@", filtered_taxon_rank)
-          }
-          plot_data <- add_global_taxonomy_percent_metadata(
-            plot_data = plot_data,
-            sqm_object = sqm_object,
-            rank = rank,
-            selected_samples = selected_samples,
-            context_label = taxonomy_context_label
-          )
+      plot_object <- make_taxonomy_plot(
+        sqm_object = sqm_object,
+        rank = rank,
+        count = count,
+        selected_samples = selected_samples,
+        top_n_taxa = top_n_taxa,
+        ignore_unmapped = ignore_unmapped,
+        ignore_unclassified = ignore_unclassified
+      )
+      plot_data <- extract_taxonomy_plot_data(plot_object, count)
+      if (scope_name == "taxonomy_by_pathway") {
+        plot_data <- plot_data |>
+          select(all_of(c("sample", "taxon", "value", "count")))
+      }
+      if (scope_name == "taxonomy_global" && identical(count, "percent")) {
+        taxonomy_context_label <- if (is.na(filtered_taxon)) {
+          "global"
+        } else {
+          paste0(filtered_taxon, "@", filtered_taxon_rank)
         }
+        plot_data <- add_global_taxonomy_percent_metadata(
+          plot_data = plot_data,
+          sqm_object = sqm_object,
+          rank = rank,
+          selected_samples = selected_samples,
+          context_label = taxonomy_context_label
+        )
       }
       file_stem <- taxonomy_file_stem(scope_name, count, rank, pathway_name)
       data_file <- file.path(rank_dir, paste0(file_stem, "_data.tsv"))
@@ -4832,16 +5158,19 @@ run_pie_mode <- function(
     return(output_manifests)
   }
 
-  ko_ec_lookup <- extract_ko_ec_lookup(orf_long)
-  pathway_sample_totals <- orf_long |>
+  ko_ec_lookup <- orf_long_result$metadata |>
+    transmute(ko_id = .data$ko_id, ec_codes = .data$ec_codes)
+  pathway_sample_totals <- orf_long_result$totals |>
     group_by(.data$sample) |>
     summarise(pathway_sample_tpm = sum(.data$tpm), .groups = "drop")
 
-  sample_names <- orf_long |>
+  positive_ko_totals <- orf_long_result$totals |>
+    filter(.data$tpm > 0)
+  positive_sample_names <- positive_ko_totals |>
     distinct(.data$sample) |>
-    pull(.data$sample) |>
-    sort()
-  ko_ids <- orf_long |>
+    pull(.data$sample)
+  sample_names <- selected_samples[selected_samples %in% positive_sample_names]
+  ko_ids <- positive_ko_totals |>
     distinct(.data$ko_id) |>
     pull(.data$ko_id) |>
     sort()
@@ -5468,7 +5797,9 @@ main_impl <- function() {
   validate_sqm_tpm_inputs(
     sqm,
     selected_samples,
-    require_kegg_tpm = mode %in% c("all", "pathview")
+    require_kegg_tpm = mode %in% c(
+      "all", "flow", "funz", "pie", "taxon", "pathview", "enzimi"
+    )
   )
   progress_message("Selected samples: ", paste(selected_samples, collapse = ", "))
 
@@ -5499,7 +5830,9 @@ main_impl <- function() {
       validate_sqm_tpm_inputs(
         filtered_sqm,
         selected_samples,
-        require_kegg_tpm = mode %in% c("all", "pathview")
+        require_kegg_tpm = mode %in% c(
+          "all", "flow", "funz", "pie", "taxon", "pathview", "enzimi"
+        )
       )
       list(
         sqm = filtered_sqm,
@@ -5577,7 +5910,8 @@ main_impl <- function() {
       context_sqm = context_sqm,
       pathway_entries = pathway_entries,
       context_label = context_label,
-      include_flow_oracle = mode %in% c("all", "flow")
+      include_kegg_oracle = mode %in% c("all", "flow", "funz", "pie", "taxon"),
+      selected_samples = selected_samples
     )
     pathway_sqms <- prepared_pathways$pathway_sqms
     record_pathway_skips(prepared_pathways$skips)
@@ -5626,7 +5960,7 @@ main_impl <- function() {
       pathway_name <- pathway_info$pathway_name
       pie_enabled <- mode %in% c("all", "pie") &&
         pathway_info$pathway_selection %in% pie_selection_modes
-      needs_pathway_analysis <- mode %in% c("all", "funz", "flow") ||
+      needs_pathway_analysis <- mode %in% c("all", "funz", "flow", "taxon") ||
         pie_enabled
       pathway_analysis <- if (needs_pathway_analysis) {
         build_pathway_analysis(pathway_info, selected_samples)
@@ -5684,7 +6018,7 @@ main_impl <- function() {
 
       if (mode %in% c("all", "taxon")) {
         manifests <- run_taxonomy_scope(
-          sqm_object = pathway_info$pathway_sqm,
+          sqm_object = pathway_analysis$pathway_sqm,
           output_dir = context_output_dir,
           manifest_base_dir = output_dir,
           output_manifests = manifests,

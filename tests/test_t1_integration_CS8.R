@@ -184,7 +184,7 @@ if (check_mode == "parity") {
       ),
       selected_samples
     )
-    flow_input <- pathway_analysis$flow_orf_long_result
+    flow_input <- pathway_analysis$orf_long_result
     orf_long <- flow_input$data
     flow_table <- script_env$build_flow_table_for_rank(
       orf_long = orf_long,
