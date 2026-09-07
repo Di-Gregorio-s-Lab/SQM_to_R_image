@@ -143,3 +143,74 @@ t1_assert_plot_data <- function(actual, expected, label, tolerance = 1e-8) {
   )
   invisible(actual)
 }
+
+t1_source_sqm_plots_without_main <- function(path = "sqm_plots.R") {
+  lines <- readLines(path, warn = FALSE)
+  main_call <- which(trimws(lines) == "main()")
+  if (length(main_call) != 1L) {
+    stop("Expected exactly one sqm_plots.R main() call.", call. = FALSE)
+  }
+
+  script_env <- new.env(parent = globalenv())
+  eval(
+    parse(text = paste(lines[-main_call], collapse = "\n")),
+    envir = script_env
+  )
+  script_env
+}
+
+t1_flow_ko_totals <- function(flow_table, ko_id, selected_samples) {
+  selected_samples <- as.character(selected_samples)
+  totals <- stats::setNames(rep(0, length(selected_samples)), selected_samples)
+  ko_rows <- flow_table[as.character(flow_table$KO) == ko_id, , drop = FALSE]
+
+  if (nrow(ko_rows) > 0L) {
+    observed <- stats::aggregate(
+      ko_rows$TPM,
+      by = list(sample = as.character(ko_rows$sample)),
+      FUN = sum
+    )
+    observed <- observed[observed$sample %in% selected_samples, , drop = FALSE]
+    totals[observed$sample] <- observed$x
+  }
+
+  unname(totals)
+}
+
+t1_flow_pathview_comparison <- function(
+    context,
+    selected_samples,
+    oracle_values,
+    flow_values) {
+  data.frame(
+    context = rep(as.character(context), length(selected_samples)),
+    sample = as.character(selected_samples),
+    oracle_tpm = as.numeric(oracle_values),
+    flow_tpm = as.numeric(flow_values),
+    delta_tpm = as.numeric(flow_values) - as.numeric(oracle_values),
+    stringsAsFactors = FALSE
+  )
+}
+
+t1_assert_flow_pathview_parity <- function(comparison, tolerance = 1e-8) {
+  mismatched <- abs(comparison$delta_tpm) > tolerance
+  if (!any(mismatched)) {
+    return(invisible(comparison))
+  }
+
+  rows <- comparison[mismatched, , drop = FALSE]
+  details <- apply(rows, 1L, function(row) {
+    paste0(
+      "context=", row[["context"]],
+      " sample=", row[["sample"]],
+      " oracle=", format(as.numeric(row[["oracle_tpm"]]), digits = 15),
+      " flow=", format(as.numeric(row[["flow_tpm"]]), digits = 15),
+      " delta=", format(as.numeric(row[["delta_tpm"]]), digits = 15)
+    )
+  })
+  stop(
+    "FLOW/PATHVIEW PARITY RED\n",
+    paste(details, collapse = "\n"),
+    call. = FALSE
+  )
+}
