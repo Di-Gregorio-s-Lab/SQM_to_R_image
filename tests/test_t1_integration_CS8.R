@@ -58,6 +58,7 @@ t1_expect_equal(
 
 fixture <- t1_read_k01563_fixture()
 pathway_ids <- c("00361", "00625")
+pathway_ko_ids_by_id <- stats::setNames(vector("list", length(pathway_ids)), pathway_ids)
 
 map_and_assert_k01563 <- function(nodes, pathway_id, source_label) {
   mapped <- t1_map_pathview_tpm(sqm, nodes, selected_samples)
@@ -80,6 +81,7 @@ if (oracle_mode == "fixture") {
     nodes <- fixture[fixture$pathway_id == pathway_id, , drop = FALSE]
     t1_expect_true(nrow(nodes) > 0L, paste0("No fixture nodes for ", pathway_id))
     map_and_assert_k01563(nodes, pathway_id, "fixture")
+    pathway_ko_ids_by_id[[pathway_id]] <- "K01563"
   }
 } else {
   download_dir <- tempfile("t1_kegg_live_")
@@ -99,6 +101,7 @@ if (oracle_mode == "fixture") {
     node_data <- pathview::node.info(
       file.path(download_dir, paste0("ko", pathway_id, ".xml"))
     )
+    pathway_ko_ids_by_id[[pathway_id]] <- script_env$extract_pathway_ko_ids(node_data)
     contains_k01563 <- vapply(
       node_data$kegg.names,
       function(values) any(values == "K01563"),
@@ -170,14 +173,26 @@ if (check_mode == "parity") {
       paste0("CS8 ", pathway_id, " KEGGPATH-selected K01563 ORF count")
     )
 
-    orf_long <- script_env$build_orf_long_table(pathway_sqm, selected_samples)
+    pathway_analysis <- script_env$build_pathway_analysis(
+      list(
+        pathway_name = pathway_name,
+        pathway_id = pathway_id,
+        pathway_selection = "defined",
+        pathway_sqm = pathway_sqm,
+        context_sqm = sqm,
+        pathway_ko_ids = pathway_ko_ids_by_id[[pathway_id]]
+      ),
+      selected_samples
+    )
+    flow_input <- pathway_analysis$flow_orf_long_result
+    orf_long <- flow_input$data
     flow_table <- script_env$build_flow_table_for_rank(
       orf_long = orf_long,
       rank = "phylum",
       selected_samples = selected_samples,
       top_n_taxa = length(unique(orf_long$phylum)),
       top_n_ko = length(unique(orf_long$ko_id)),
-      ko_lookup = script_env$get_ko_name_lookup(pathway_sqm)
+      ko_lookup = script_env$get_ko_name_lookup(sqm)
     )
     flow_values <- t1_flow_ko_totals(flow_table, "K01563", selected_samples)
     comparisons[[pathway_index]] <- t1_flow_pathview_comparison(
@@ -188,6 +203,7 @@ if (check_mode == "parity") {
     )
   }
 
-  # Intentional RED until tranche 2.
+  # Tranche 2: the textual subset remains diagnostic only; FLOW uses all ORFs
+  # assigned to pathview's pathway KOs and the official SQM KEGG TPM margin.
   t1_assert_flow_pathview_parity(do.call(rbind, comparisons))
 }

@@ -209,7 +209,7 @@ t1_assert_flow_pathview_parity <- function(comparison, tolerance = 1e-8) {
     )
   })
   stop(
-    "FLOW/PATHVIEW PARITY RED\n",
+      "FLOW/PATHVIEW PARITY FAILURE\n",
     paste(details, collapse = "\n"),
     call. = FALSE
   )

@@ -77,14 +77,25 @@ t1_expect_identical(
   "Synthetic KEGGPATH subset"
 )
 
-orf_long <- script_env$build_orf_long_table(pathway_sqm, selected_samples)
+pathway_analysis <- script_env$build_pathway_analysis(
+  list(
+    pathway_name = "Synthetic degradation pathway",
+    pathway_id = "99999",
+    pathway_selection = "defined",
+    pathway_sqm = pathway_sqm,
+    context_sqm = full_sqm,
+    pathway_ko_ids = "K01563"
+  ),
+  selected_samples
+)
+flow_input <- pathway_analysis$flow_orf_long_result
 flow_table <- script_env$build_flow_table_for_rank(
-  orf_long = orf_long,
+  orf_long = flow_input$data,
   rank = "phylum",
   selected_samples = selected_samples,
   top_n_taxa = 2L,
   top_n_ko = 1L,
-  ko_lookup = script_env$get_ko_name_lookup(pathway_sqm)
+  ko_lookup = script_env$get_ko_name_lookup(full_sqm)
 )
 flow_values <- t1_flow_ko_totals(flow_table, "K01563", selected_samples)
 
@@ -106,6 +117,6 @@ comparison <- t1_flow_pathview_comparison(
   flow_values = flow_values
 )
 
-# Intentional RED until tranche 2: pathview sees the complete KEGG function
-# matrix, whereas the current flow only sees the KEGGPATH-selected ORF.
+# The textual pathway subset still contains only one ORF, but FLOW must use
+# pathview KO membership and the complete SQM KEGG functional margin.
 t1_assert_flow_pathview_parity(comparison)

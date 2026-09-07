@@ -82,12 +82,12 @@ run_case("required packages are selected from mode and FLOW format", {
 
   expect_package_set(
     required_packages("flow", "png"),
-    c(common, "ggalluvial", "ggnewscale"),
+    c(common, "ggalluvial", "ggnewscale", "pathview"),
     "FLOW PNG package selection is not minimal"
   )
   expect_package_set(
     required_packages("flow", "html"),
-    c(common, "ggalluvial", "plotly", "htmlwidgets", "rmarkdown"),
+    c(common, "ggalluvial", "plotly", "htmlwidgets", "rmarkdown", "pathview"),
     "FLOW HTML package selection is incomplete"
   )
   expect_package_set(
