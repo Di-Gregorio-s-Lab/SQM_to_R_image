@@ -11,6 +11,7 @@ excluded_tests <- c(
   "test_p3_integration_Au_sip.R",
   "test_t1_integration_CS8.R",
   "test_t3_integration_CS8.R",
+  "test_t4_integration_CS8.R",
   "test_run_contract_integration_Au_sip.R"
 )
 test_files <- test_files[!basename(test_files) %in% excluded_tests]
