@@ -212,6 +212,24 @@ t1_expect_identical(
   "00910",
   "Curated pathway IDs must take precedence"
 )
+legacy_catalog_calls <- 0L
+legacy_catalog_loader <- function() {
+  legacy_catalog_calls <<- legacy_catalog_calls + 1L
+  stop("Legacy SQM pathway alias unexpectedly reached the live catalog.", call. = FALSE)
+}
+t1_expect_identical(
+  script_env$resolve_kegg_pathway_id(
+    "Carbon fixation pathways in prokaryotes",
+    legacy_catalog_loader
+  ),
+  "00720",
+  "Legacy SQM pathway name must resolve to current KEGG pathway 00720"
+)
+t1_expect_identical(
+  legacy_catalog_calls,
+  0L,
+  "Legacy SQM pathway alias must be resolved before catalog download"
+)
 catalog_loads <- 0L
 catalog_loader <- function() {
   catalog_loads <<- catalog_loads + 1L

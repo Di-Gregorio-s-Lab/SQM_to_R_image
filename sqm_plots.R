@@ -165,6 +165,12 @@ known_pathways <- data.frame(
   ),
   stringsAsFactors = FALSE
 )
+pathway_name_aliases <- data.frame(
+  pathway_id = "00720",
+  alias_name = "Carbon fixation pathways in prokaryotes",
+  current_kegg_name = "Other carbon fixation pathways",
+  stringsAsFactors = FALSE
+)
 default_pathway_ids <- known_pathways$pathway_id
 default_pathway_selection_modes <- c("defined", "top20")
 default_pathway_top_n <- 20L
@@ -1323,13 +1329,17 @@ parse_kegg_pathway_membership <- function(orf_ids, pathway_fields) {
 }
 
 pathway_id_for_name <- function(pathway_name) {
-  match <- known_pathways |>
+  matched_pathway <- known_pathways |>
     filter(tolower(.data$canonical_pathway_name) == tolower(pathway_name))
-  if (nrow(match) == 0L) {
-    NA_character_
-  } else {
-    match$pathway_id[[1]]
+  if (nrow(matched_pathway) > 0L) {
+    return(matched_pathway$pathway_id[[1L]])
   }
+  matched_alias <- pathway_name_aliases |>
+    filter(tolower(.data$alias_name) == tolower(pathway_name))
+  if (nrow(matched_alias) > 0L) {
+    return(matched_alias$pathway_id[[1L]])
+  }
+  NA_character_
 }
 
 normalize_kegg_pathway_name <- function(pathway_name) {
