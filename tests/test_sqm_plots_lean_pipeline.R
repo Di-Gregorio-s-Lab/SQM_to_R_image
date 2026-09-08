@@ -82,7 +82,7 @@ fake_export_pathway <- function(SQM, pathway_id, samples, output_dir, ...) {
   path
 }
 
-make_config <- function(output_dir, mode = "all", plan_only = FALSE) list(
+make_config <- function(output_dir, mode = "huge", plan_only = FALSE) list(
   output_dir = output_dir,
   mode = mode,
   samples = "S1",
@@ -181,6 +181,19 @@ manifests <- sort(basename(list.files(
 stopifnot(identical(manifests, sort(c(
   "manifest_flow.tsv", "manifest_funz.tsv", "manifest_pie.tsv"
 ))))
+
+normal_dir <- tempfile("lean_pipeline_normal_")
+dir.create(normal_dir)
+on.exit(unlink(normal_dir, recursive = TRUE, force = TRUE), add = TRUE)
+normal_result <- invoke(make_config(normal_dir, mode = "normal"))
+normal_roots <- setdiff(graphic_roots, "pie")
+stopifnot(
+  nrow(normal_result$errors) == 0L,
+  all(dir.exists(file.path(normal_dir, normal_roots))),
+  !dir.exists(file.path(normal_dir, "pie")),
+  file.exists(file.path(normal_dir, "top20.tsv")),
+  !any(basename(list.dirs(normal_dir, recursive = TRUE, full.names = TRUE)) == "top20")
+)
 
 errors_path <- file.path(output_dir, "errors.tsv")
 errors <- utils::read.delim(errors_path, check.names = FALSE, stringsAsFactors = FALSE)

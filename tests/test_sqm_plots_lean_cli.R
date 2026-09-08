@@ -6,16 +6,24 @@ if (!exists("build_config", envir = script_env, mode = "function", inherits = FA
 }
 
 config <- script_env$build_config(script_env$parse_args(c(
-  "--project_dir", "in/Au_sip", "--output_dir=out/lean", "--mode", "all"
+  "--project_dir", "in/Au_sip", "--output_dir=out/lean", "--mode", "huge"
 )))
 stopifnot(
-  identical(config$mode, "all"),
+  identical(config$mode, "huge"),
   identical(config$workers, script_env$default_workers()),
   identical(config$selection_modes, c("defined", "top20")),
   identical(config$pie_selection_modes, "defined"),
   identical(vapply(config$dimensions, `[[`, character(1L), "name"), c("12x9", "16x9", "12x16")),
   identical(config$formats, c("png", "html")),
   identical(config$pathview_sample_modes, c("insieme", "separato"))
+)
+
+normal <- script_env$build_config(script_env$parse_args(c(
+  "--project_dir", "in/Au_sip", "--output_dir=out/lean", "--mode", "normal"
+)))
+stopifnot(
+  identical(normal$mode, "normal"),
+  identical(normal$selection_modes, "defined")
 )
 
 without_pie <- script_env$build_config(script_env$parse_args(c(
@@ -27,6 +35,15 @@ failed <- FALSE
 tryCatch(
   script_env$build_config(script_env$parse_args(c(
     "--project_dir", "in/Au_sip", "--output_dir", "out/lean", "--mode", "enzimi"
+  ))),
+  error = function(...) failed <<- TRUE
+)
+stopifnot(failed)
+
+failed <- FALSE
+tryCatch(
+  script_env$build_config(script_env$parse_args(c(
+    "--project_dir", "in/Au_sip", "--output_dir", "out/lean", "--mode", "all"
   ))),
   error = function(...) failed <<- TRUE
 )
@@ -68,10 +85,16 @@ stopifnot(
 global <- script_env$make_contexts(sqm, list(taxa = character(), output_dir = tempdir()))
 stopifnot(length(global) == 1L, is.na(global[[1L]]$filtered_taxon))
 stopifnot(
-  identical(script_env$required_packages(list(plan_only = TRUE, mode = "all", formats = "html")), c("SQMtools", "ggplot2")),
+  identical(script_env$required_packages(list(plan_only = TRUE, mode = "huge", formats = "html")), c("SQMtools", "ggplot2")),
   all(c("ggalluvial", "plotly", "htmlwidgets", "pathview") %in%
-        script_env$required_packages(list(plan_only = FALSE, mode = "all", formats = "html")))
+        script_env$required_packages(list(plan_only = FALSE, mode = "normal", formats = "html")))
 )
-stopifnot(any(grepl("--workers", capture.output(script_env$print_help()), fixed = TRUE)))
+help_text <- capture.output(script_env$print_help())
+stopifnot(
+  any(grepl("--workers", help_text, fixed = TRUE)),
+  any(grepl("huge", help_text, fixed = TRUE)),
+  any(grepl("normal", help_text, fixed = TRUE)),
+  !any(grepl("Modes: all", help_text, fixed = TRUE))
+)
 
 message("PASS: lean CLI exposes validated defaults without the legacy enzimi mode")
