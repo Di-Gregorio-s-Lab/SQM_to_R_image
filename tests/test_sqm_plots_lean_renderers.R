@@ -91,6 +91,25 @@ stopifnot(all(c("sample", "ko_id", "taxon", "tpm", "percent") %in% names(flow)))
 expect_close(sum(flow$tpm), 150, "FLOW changed allocated mass")
 expect_close(sum(flow$percent), 100, "FLOW percentages do not close")
 
+taxon_levels <- unique(flow$taxon)
+ko_levels <- unique(flow$ko_id)
+flow_palette <- need("build_flow_color_map")(taxon_levels, ko_levels)
+stopifnot(
+  identical(unname(flow_palette["Alpha"]), "#5d8aa8"),
+  identical(unname(flow_palette["K00001"]), "#e32636"),
+  identical(unname(flow_palette["Other"]), "grey70")
+)
+
+flow_plot <- need("make_flow_plot")(flow)
+flow_built <- ggplot2::ggplot_build(flow_plot)
+flow_strata <- flow_built$data[[2L]]
+expected_strata_colors <- toupper(unname(flow_palette[as.character(flow_strata$stratum)]))
+stopifnot(
+  !anyNA(expected_strata_colors),
+  identical(toupper(as.character(flow_strata$fill)), expected_strata_colors),
+  !any(toupper(as.character(flow_strata$fill)) %in% c("WHITE", "#FFFFFF"))
+)
+
 unclassified <- allocated
 unclassified$phylum <- NA_character_
 unclassified_flow <- need("build_flow_table")(unclassified, "S1", "phylum", 2L, 2L)
@@ -138,6 +157,20 @@ assert_renderer(flow_manifest, output_dir, "flowplot")
 assert_renderer(pie_manifest, output_dir, "pie")
 
 if (requireNamespace("plotly", quietly = TRUE) && requireNamespace("htmlwidgets", quietly = TRUE)) {
+  flow_widget <- need("make_flow_sankey")(flow)
+  flow_trace <- plotly::plotly_build(flow_widget)$x$data[[1L]]
+  expected_node_colors <- toupper(unname(flow_palette[c(taxon_levels, ko_levels)]))
+  observed_node_colors <- toupper(as.character(unlist(flow_trace$node$color, use.names = FALSE)))
+  expected_link_colors <- toupper(unname(grDevices::adjustcolor(
+    flow_palette[flow$taxon],
+    alpha.f = 0.65
+  )))
+  observed_link_colors <- toupper(as.character(unlist(flow_trace$link$color, use.names = FALSE)))
+  stopifnot(
+    identical(observed_node_colors, expected_node_colors),
+    identical(observed_link_colors, expected_link_colors)
+  )
+
   flow_html <- do.call(
     need("render_flow_html"),
     c(list(table = flow), render_args[c("context", "pathway_id", "pathway_name")])
