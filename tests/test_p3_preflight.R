@@ -82,12 +82,12 @@ run_case("required packages are selected from mode and FLOW format", {
 
   expect_package_set(
     required_packages("flow", "png"),
-    c(common, "ggalluvial", "ggnewscale", "pathview"),
+    c(common, "ggalluvial", "pathview"),
     "FLOW PNG package selection is not minimal"
   )
   expect_package_set(
     required_packages("flow", "html"),
-    c(common, "ggalluvial", "plotly", "htmlwidgets", "rmarkdown", "pathview"),
+    c(common, "ggalluvial", "plotly", "htmlwidgets", "pathview"),
     "FLOW HTML package selection is incomplete"
   )
   expect_package_set(
@@ -113,8 +113,8 @@ run_case("required packages are selected from mode and FLOW format", {
   expect_package_set(
     required_packages("all", c("png", "html")),
     c(
-      common, "ggalluvial", "ggnewscale", "plotly", "htmlwidgets",
-      "rmarkdown", "forcats", "rlang", "pathview"
+      common, "ggalluvial", "plotly", "htmlwidgets",
+      "forcats", "rlang", "pathview"
     ),
     "All-mode package selection is incomplete"
   )
@@ -126,21 +126,14 @@ run_case("required packages are selected from mode and FLOW format", {
   )
 })
 
-run_case("FLOW HTML preflight requires Pandoc", {
-  pandoc_error <- tryCatch(
-    {
-      script_env$check_flow_html_preflight(
-        "flow",
-        "html",
-        pandoc_available_fn = function() FALSE
-      )
-      NA_character_
-    },
-    error = function(error) conditionMessage(error)
-  )
+run_case("FLOW HTML preflight does not require Pandoc", {
   expect_true(
-    !is.na(pandoc_error) && grepl("Pandoc", pandoc_error, fixed = TRUE),
-    "FLOW HTML accepted an environment without Pandoc"
+    isTRUE(script_env$check_flow_html_preflight(
+      "flow",
+      "html",
+      pandoc_available_fn = function() FALSE
+    )),
+    "Non-self-contained FLOW HTML unexpectedly required Pandoc"
   )
   expect_true(
     isTRUE(script_env$check_flow_html_preflight(

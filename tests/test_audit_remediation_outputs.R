@@ -146,27 +146,24 @@ run_case("Pathview isolates each export and manifests exact source data", {
   stopifnot(identical(source_data$S0, c(10, 20)))
 })
 
-run_case("FLOW HTML is self-contained", {
+run_case("FLOW HTML uses a stable support directory", {
   html_path <- file.path(test_root, "selfcontained", "widget.html")
   widget <- plotly::plot_ly(x = 1:2, y = c(2, 1), type = "scatter", mode = "lines")
   script_env$save_html_widget(widget, html_path)
   stopifnot(file.exists(html_path), file.info(html_path)$size > 0)
-  stopifnot(!dir.exists(file.path(dirname(html_path), "widget_files")))
+  dependency_dir <- file.path(dirname(html_path), "widget_files")
+  stopifnot(dir.exists(dependency_dir))
+  stopifnot(length(list.files(dependency_dir, recursive = TRUE)) > 0L)
 
   protected_html_path <- file.path(test_root, "protected", "widget.html")
   protected_dependency_dir <- file.path(dirname(protected_html_path), "widget_files")
   dir.create(protected_dependency_dir, recursive = TRUE)
   protected_file <- file.path(protected_dependency_dir, "existing-output.txt")
   writeLines("preserve", protected_file)
-  protected_error <- tryCatch(
-    {
-      script_env$save_html_widget(widget, protected_html_path)
-      NA_character_
-    },
-    error = function(error) conditionMessage(error)
-  )
-  stopifnot(!is.na(protected_error))
+  script_env$save_html_widget(widget, protected_html_path)
+  stopifnot(file.exists(protected_html_path))
   stopifnot(file.exists(protected_file))
+  stopifnot(identical(readLines(protected_file, warn = FALSE), "preserve"))
 })
 
 run_case("zero-signal enzymes have status TSV but no PNG", {

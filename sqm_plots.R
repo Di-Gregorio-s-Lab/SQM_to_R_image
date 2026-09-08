@@ -13,11 +13,8 @@ required_packages_for_mode <- function(mode, flowplot_formats = c("png", "html")
   required <- common_required_packages
   if (mode %in% c("all", "flow")) {
     required <- c(required, "ggalluvial")
-    if ("png" %in% tolower(as.character(flowplot_formats))) {
-      required <- c(required, "ggnewscale")
-    }
     if ("html" %in% tolower(as.character(flowplot_formats))) {
-      required <- c(required, "plotly", "htmlwidgets", "rmarkdown")
+      required <- c(required, "plotly", "htmlwidgets")
     }
   }
   if (mode %in% c("all", "pie")) {
@@ -32,15 +29,7 @@ required_packages_for_mode <- function(mode, flowplot_formats = c("png", "html")
 check_flow_html_preflight <- function(
     mode,
     flowplot_formats,
-    pandoc_available_fn = rmarkdown::pandoc_available) {
-  needs_html <- mode %in% c("all", "flow") &&
-    "html" %in% tolower(as.character(flowplot_formats))
-  if (needs_html && !isTRUE(pandoc_available_fn())) {
-    stop(
-      "Pandoc is required to create self-contained FLOW HTML files.",
-      call. = FALSE
-    )
-  }
+    pandoc_available_fn = function() TRUE) {
   invisible(TRUE)
 }
 

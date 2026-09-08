@@ -315,7 +315,7 @@ run_case("FLOW legend module exposes taxonomy and KO/EC percentages", {
   )
 })
 
-run_case("FLOW PNG exposes two native legend sections", {
+run_case("FLOW PNG uses the simple legend-free renderer", {
   rank_tbl <- script_env$build_flow_table_for_rank(
     legend_orfs,
     "phylum",
@@ -336,19 +336,10 @@ run_case("FLOW PNG exposes two native legend sections", {
     "phylum",
     "S_legend"
   )
-  scale_titles <- vapply(
-    plot_object$scales$scales,
-    function(scale) {
-      if (is.character(scale$name) && length(scale$name) == 1L) scale$name else NA_character_
-    },
-    character(1)
-  )
-  expect_true(
-    all(c(
-      "Taxonomy | % of sample",
-      "Function (KO / EC) | % of sample"
-    ) %in% stats::na.omit(scale_titles)),
-    "FLOW PNG does not expose two independently titled legend scales"
+  expect_identical(
+    plot_object$theme$legend.position,
+    "none",
+    "FLOW PNG unexpectedly rendered a legend"
   )
 
   png_path <- tempfile("flow_two_legends_", fileext = ".png")
@@ -363,11 +354,11 @@ run_case("FLOW PNG exposes two native legend sections", {
   )
   expect_true(
     file.exists(png_path) && file.info(png_path)$size > 0L,
-    "FLOW PNG with two legends did not render at 75 DPI"
+    "Simple FLOW PNG did not render at 75 DPI"
   )
 })
 
-run_case("FLOW Sankey nodes and hover expose percentages and KO/EC", {
+run_case("FLOW Sankey uses plain nodes and detailed hover", {
   rank_tbl <- script_env$build_flow_table_for_rank(
     legend_orfs,
     "phylum",
@@ -393,16 +384,13 @@ run_case("FLOW Sankey nodes and hover expose percentages and KO/EC", {
   hover_text <- as.character(unlist(trace$link$customdata, use.names = FALSE))
 
   expect_true(
-    all(c(
-      "Alpha | 60.0%",
-      "K00001 / EC 1.1.1.1;2.2.2.2 | 60.0%",
-      "Other KOs | 10.0%"
-    ) %in% node_labels),
-    "FLOW Sankey node labels omit taxonomy or KO/EC percentages"
+    all(c("Alpha", "K00001", "Other KOs") %in% node_labels),
+    "FLOW Sankey plain node labels are incomplete"
   )
   expect_true(
     any(grepl("Taxon share: 60.0%", hover_text, fixed = TRUE)) &&
-      any(grepl("Function: K00001 / EC 1.1.1.1;2.2.2.2", hover_text, fixed = TRUE)) &&
+      any(grepl("KO: K00001", hover_text, fixed = TRUE)) &&
+      any(grepl("EC: 1.1.1.1;2.2.2.2", hover_text, fixed = TRUE)) &&
       any(grepl("Function share: 60.0%", hover_text, fixed = TRUE)) &&
       any(grepl("TPM:", hover_text, fixed = TRUE)) &&
       any(grepl("Flow:", hover_text, fixed = TRUE)),
