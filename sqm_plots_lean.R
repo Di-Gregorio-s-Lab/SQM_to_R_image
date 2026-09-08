@@ -834,7 +834,7 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
     return(invisible(list(errors = empty_errors)))
   }
 
-  selection_modes <- config$selection_modes %||% c("defined", "top20")
+  selection_modes <- if ("normal" %in% config$mode) "defined" else config$selection_modes %||% c("defined", "top20")
   entries <- list()
   if ("defined" %in% selection_modes && length(config$defined_pathways %||% character())) {
     defined <- resolve_defined_pathways(config$defined_pathways, catalog)
@@ -865,7 +865,13 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
     })
   }
 
-  mode_list <- if ("all" %in% config$mode) c("funz", "flow", "taxon", "pie") else intersect(config$mode, c("funz", "flow", "taxon", "pie"))
+  mode_list <- if ("huge" %in% config$mode) {
+    c("funz", "flow", "taxon", "pie")
+  } else if ("normal" %in% config$mode) {
+    c("funz", "flow", "taxon")
+  } else {
+    intersect(config$mode, c("funz", "flow", "taxon", "pie"))
+  }
   tasks <- list()
   for (key in names(prepared)) for (mode in mode_list) {
     entry <- prepared[[key]]
@@ -894,7 +900,7 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
     if (mode %in% names(manifest_rows)) manifest_rows[[mode]][[length(manifest_rows[[mode]]) + 1L]] <- table
   }
 
-  if (any(config$mode %in% c("all", "taxon"))) for (count in config$counts) for (rank in config$ranks) for (dimension in config$dimensions) {
+  if (any(config$mode %in% c("huge", "normal", "taxon"))) for (count in config$counts) for (rank in config$ranks) for (dimension in config$dimensions) {
     tryCatch(render_taxonomy(
       sqm, config$samples, rank, context, NA_character_, NA_character_,
       dimension$width, dimension$height, dimension$dpi, plot_taxonomy_fn, count, dimension$name
@@ -904,7 +910,7 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
     ))
   }
 
-  if (any(config$mode %in% c("all", "funz"))) tryCatch({
+  if (any(config$mode %in% c("huge", "normal", "funz"))) tryCatch({
     enzyme <- build_enzyme_table(sqm, config$samples, config$enzyme_ecs %||% NULL)
     rows <- render_enzymes(enzyme, context, config$dimensions, config$enzyme_plot_types %||% c("bar", "line"))
     if (nrow(rows)) manifest_rows$funz[[length(manifest_rows$funz) + 1L]] <- rows
@@ -913,7 +919,7 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
     error = conditionMessage(error), stringsAsFactors = FALSE
   ))
 
-  if (any(config$mode %in% c("all", "pathview"))) for (key in names(prepared)) {
+  if (any(config$mode %in% c("huge", "normal", "pathview"))) for (key in names(prepared)) {
     entry <- prepared[[key]]
     if (is.null(entry$analysis$pathway_sqm)) next
     task_context <- context
@@ -1008,10 +1014,10 @@ build_config <- function(args) {
   for (name in c("project_dir", "output_dir", "mode")) {
     if (is.null(args[[name]]) || !nzchar(args[[name]])) stop("Missing --", name, call. = FALSE)
   }
-  modes <- c("all", "funz", "flow", "taxon", "pie", "pathview")
+  modes <- c("huge", "normal", "funz", "flow", "taxon", "pie", "pathview")
   selected_modes <- csv(args$mode)
   if (!length(selected_modes) || length(setdiff(selected_modes, modes)) ||
-      ("all" %in% selected_modes && length(selected_modes) > 1L)) {
+      (any(selected_modes %in% c("huge", "normal")) && length(selected_modes) > 1L)) {
     stop("mode accepts a comma-separated subset of: ", paste(modes, collapse = ", "), call. = FALSE)
   }
   tax_mode <- args$tax_mode %||% "prokfilter"
@@ -1022,6 +1028,7 @@ build_config <- function(args) {
   if (!length(selection_modes) || length(setdiff(selection_modes, c("defined", "top20")))) {
     stop("pathway_selection_modes accepts defined,top20.", call. = FALSE)
   }
+  if ("normal" %in% selected_modes) selection_modes <- "defined"
   ranks <- csv(args$taxonomy_ranks, c("phylum", "class", "order", "family", "genus", "species"))
   counts <- csv(args$taxonomy_counts, c("abund", "percent"))
   formats <- csv(args$flowplot_formats, c("png", "html"))
@@ -1051,7 +1058,7 @@ build_config <- function(args) {
 
 print_help <- function() cat(
   "Usage: Rscript sqm_plots_lean.R --project_dir PATH --output_dir PATH --mode MODE [options]\n",
-  "Modes: all, oppure una lista separata da virgole: funz,flow,taxon,pie,pathview\n",
+  "Modes: huge (tutto), normal (senza PIE e grafici Top20), oppure: funz,flow,taxon,pie,pathview\n",
   "Options keep the sqm_plots.R names; additions:\n",
   "  --plan_only       Write contextual top20.tsv files and stop.\n",
   "  --workers=N       Parallel rendering workers; default min(4, physical cores).\n",
@@ -1120,8 +1127,8 @@ parse_kgml <- function(path) {
 
 required_packages <- function(config) {
   packages <- c("SQMtools", "ggplot2")
-  if (!config$plan_only && any(config$mode %in% c("all", "flow"))) packages <- c(packages, "ggalluvial")
-  if (!config$plan_only && "html" %in% config$formats && any(config$mode %in% c("all", "flow"))) {
+  if (!config$plan_only && any(config$mode %in% c("huge", "normal", "flow"))) packages <- c(packages, "ggalluvial")
+  if (!config$plan_only && "html" %in% config$formats && any(config$mode %in% c("huge", "normal", "flow"))) {
     packages <- c(packages, "plotly", "htmlwidgets")
   }
   if (!config$plan_only) packages <- c(packages, "pathview")
