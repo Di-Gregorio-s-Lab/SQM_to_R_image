@@ -986,21 +986,27 @@ save_png_dimensions <- function(
 save_html_widget <- function(widget, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   dependency_dir <- paste0(tools::file_path_sans_ext(path), "_files")
-  if (dir.exists(dependency_dir)) {
+  htmlwidgets::saveWidget(
+    widget,
+    file = path,
+    selfcontained = FALSE,
+    libdir = basename(dependency_dir)
+  )
+  assert_output_artifact(path, "HTML output")
+  dependency_files <- list.files(
+    dependency_dir,
+    recursive = TRUE,
+    full.names = TRUE,
+    all.files = TRUE,
+    no.. = TRUE
+  )
+  if (!dir.exists(dependency_dir) || length(dependency_files) == 0L) {
     stop(
-      "Refusing to overwrite or remove an existing HTML dependency directory: ",
+      "HTML support directory was not created or is empty: ",
       dependency_dir,
       call. = FALSE
     )
   }
-  htmlwidgets::saveWidget(widget, file = path, selfcontained = TRUE)
-  if (dir.exists(dependency_dir)) {
-    unlink(dependency_dir, recursive = TRUE, force = TRUE)
-  }
-  if (dir.exists(dependency_dir)) {
-    stop("Generated HTML dependency directory could not be removed: ", dependency_dir, call. = FALSE)
-  }
-  assert_output_artifact(path, "Self-contained HTML output")
   path
 }
 
