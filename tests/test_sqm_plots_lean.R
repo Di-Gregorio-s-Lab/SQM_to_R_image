@@ -154,4 +154,20 @@ stopifnot(
   identical(parallel_result$errors, task_result$errors)
 )
 
+local({
+  render_value <- function(task) task$value
+  render_task <- function(task) render_value(task)
+  exported_result <- need("run_tasks")(tasks, render_task, workers = 2L)
+  stopifnot(identical(exported_result$results, list(a = "A", b = "B", c = "C")))
+})
+
+evalq({
+  cluster_render_value <- function(task) task$value
+  cluster_render_task <- function(task) cluster_render_value(task)
+}, envir = script_env)
+script_env_result <- need("run_tasks")(
+  tasks, get("cluster_render_task", envir = script_env), workers = 2L
+)
+stopifnot(identical(script_env_result$results, list(a = "A", b = "B", c = "C")))
+
 message("PASS: lean core contracts are deterministic and network-free")

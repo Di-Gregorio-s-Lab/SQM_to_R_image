@@ -181,6 +181,12 @@ run_tasks <- function(tasks, worker, workers = 1L) {
   if (workers > 1L && length(tasks) > 1L) {
     cluster <- parallel::makeCluster(min(workers, length(tasks)))
     on.exit(parallel::stopCluster(cluster), add = TRUE)
+    worker_environment <- environment(worker)
+    parallel::clusterExport(
+      cluster,
+      ls(envir = worker_environment, all.names = TRUE),
+      envir = worker_environment
+    )
     completed <- parallel::parLapply(cluster, tasks, execute)
   } else {
     completed <- lapply(tasks, execute)
