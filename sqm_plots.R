@@ -563,7 +563,11 @@ run_id_exists <- function(output_dir, run_id) {
     all.files = TRUE,
     include.dirs = FALSE
   )
-  any(grepl(paste0("__", validate_run_id(run_id)), basename(existing_files), fixed = TRUE))
+  run_id <- validate_run_id(run_id)
+  any(
+    basename(existing_files) == paste0(run_id, ".log") |
+      grepl(paste0("__", run_id), basename(existing_files), fixed = TRUE)
+  )
 }
 
 allocate_run_id <- function(
@@ -597,6 +601,10 @@ set_run_context <- function(
   .sqm_run_context$samples <- as.character(samples)
   .sqm_run_context$cli_args <- as.character(cli_args)
   .sqm_run_context$warnings <- character()
+  .sqm_run_context$completed_artifacts <- character()
+  .sqm_run_context$completed_manifests <- character()
+  .sqm_run_context$active_manifest_registry <- NULL
+  .sqm_run_context$log_path <- NA_character_
   .sqm_run_context$pathway_skips <- data.frame(
     context = character(),
     pathway = character(),
@@ -636,6 +644,7 @@ record_run_warning <- function(message) {
       .sqm_run_context$warnings,
       as.character(message)
     ))
+    append_run_log("WARN", message)
   }
   invisible(message)
 }
@@ -652,6 +661,16 @@ record_pathway_skips <- function(skips) {
     .sqm_run_context$pathway_skips,
     as.data.frame(skips[required_columns], stringsAsFactors = FALSE)
   ))
+  apply(skips[required_columns], 1L, function(skip) {
+    append_run_log(
+      "SKIP",
+      paste0(
+        "context=", skip[["context"]],
+        " pathway=", skip[["pathway"]],
+        " reason=", skip[["reason"]]
+      )
+    )
+  })
   invisible(skips)
 }
 
@@ -671,15 +690,49 @@ add_run_id_to_path <- function(path, run_id) {
 }
 
 run_artifact_path <- function(path) {
-  run_id <- current_run_id()
-  if (is.na(run_id)) path else add_run_id_to_path(path, run_id)
+  path
 }
 
-write_tsv_safe <- function(
+append_run_log <- function(level, message) {
+  log_path <- .sqm_run_context$log_path
+  if (is.null(log_path) || length(log_path) != 1L || is.na(log_path) || !nzchar(log_path)) {
+    return(invisible(FALSE))
+  }
+  line <- paste0(
+    format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"),
+    " [", as.character(level), "] ",
+    paste0(as.character(message), collapse = "")
+  )
+  cat(line, "\n", file = log_path, append = TRUE, sep = "")
+  invisible(TRUE)
+}
+
+record_completed_artifact <- function(path) {
+  if (!is.na(current_run_id())) {
+    normalized <- normalizePath(path, winslash = "/", mustWork = FALSE)
+    .sqm_run_context$completed_artifacts <- unique(c(
+      .sqm_run_context$completed_artifacts,
+      normalized
+    ))
+  }
+  invisible(path)
+}
+
+record_completed_manifest <- function(path) {
+  if (!is.na(current_run_id())) {
+    normalized <- normalizePath(path, winslash = "/", mustWork = FALSE)
+    .sqm_run_context$completed_manifests <- unique(c(
+      .sqm_run_context$completed_manifests,
+      normalized
+    ))
+  }
+  invisible(path)
+}
+
+write_tsv_contents <- function(
     data,
     path,
     readr_available = requireNamespace("readr", quietly = TRUE)) {
-  path <- run_artifact_path(path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   if (isTRUE(readr_available)) {
     readr::write_tsv(data, path, na = "NA")
@@ -699,8 +752,123 @@ write_tsv_safe <- function(
   path
 }
 
+write_tsv_safe <- function(
+    data,
+    path,
+    readr_available = requireNamespace("readr", quietly = TRUE)) {
+  write_tsv_contents(data, path, readr_available = readr_available)
+  record_completed_artifact(path)
+  path
+}
+
 progress_message <- function(..., .prefix = "[sqm_plots]") {
-  message(.prefix, " ", paste0(..., collapse = ""))
+  text <- paste0(..., collapse = "")
+  message(.prefix, " ", text)
+  append_run_log("INFO", paste0(.prefix, " ", text))
+}
+
+installed_package_version <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    return("not-installed")
+  }
+  as.character(utils::packageVersion(package))
+}
+
+initialize_run_log <- function(output_dir, project_dir, mode, tax_mode) {
+  run_id <- current_run_id(required = TRUE)
+  if (!dir.exists(output_dir)) {
+    stop("Unable to initialize run log; output_dir does not exist: ", output_dir, call. = FALSE)
+  }
+  log_path <- file.path(output_dir, paste0(run_id, ".log"))
+  if (file.exists(log_path)) {
+    stop("Refusing to overwrite an existing run log: ", log_path, call. = FALSE)
+  }
+
+  header <- c(
+    paste0("RUN_ID=", run_id),
+    paste0("STARTED_AT=", format(.sqm_run_context$started_at, "%Y-%m-%dT%H:%M:%S%z")),
+    paste0("PROJECT_DIR=", as.character(project_dir)),
+    paste0("OUTPUT_DIR=", normalizePath(output_dir, winslash = "/", mustWork = TRUE)),
+    paste0("MODE=", as.character(mode)),
+    paste0("TAX_MODE=", as.character(tax_mode)),
+    paste0("CLI_ARGUMENTS=", paste(.sqm_run_context$cli_args, collapse = " ")),
+    paste0("R_VERSION=", as.character(getRversion())),
+    paste0("SQMTOOLS_VERSION=", installed_package_version("SQMtools")),
+    paste0("PATHVIEW_VERSION=", installed_package_version("pathview"))
+  )
+  writeLines(header, log_path, useBytes = TRUE)
+  if (!file.exists(log_path) || is.na(file.info(log_path)$size)) {
+    stop("Unable to create run log: ", log_path, call. = FALSE)
+  }
+  .sqm_run_context$log_path <- log_path
+  append_run_log("INFO", "Run log initialized")
+  log_path
+}
+
+record_legacy_outputs <- function(output_dir) {
+  if (!dir.exists(output_dir)) {
+    return(invisible(character()))
+  }
+  files <- list.files(
+    output_dir,
+    recursive = TRUE,
+    full.names = TRUE,
+    all.files = TRUE,
+    include.dirs = FALSE
+  )
+  relative <- vapply(files, relative_to_output, character(1), output_dir = output_dir)
+  normalized <- gsub("\\\\", "/", relative)
+  legacy_manifest <- grepl(
+    "(^|/)(manifest_(all|run|failed_artifacts|taxon|pathview)(__[0-9]{8}T[0-9]{6}_UTC[pm][0-9]{4}_[0-9a-f]{4})?\\.tsv)$",
+    normalized,
+    perl = TRUE
+  )
+  legacy_run_suffix <- grepl(
+    "__[0-9]{8}T[0-9]{6}_UTC[pm][0-9]{4}_[0-9a-f]{4}(\\.[^/]+)?$",
+    basename(normalized),
+    perl = TRUE
+  )
+  legacy <- sort(unique(normalized[legacy_manifest | legacy_run_suffix]))
+  if (length(legacy) > 0L) {
+    preview <- paste(utils::head(legacy, 10L), collapse = " | ")
+    suffix <- if (length(legacy) > 10L) paste0(" | ... ", length(legacy) - 10L, " more") else ""
+    append_run_log(
+      "LEGACY",
+      paste0(length(legacy), " legacy manifest/artifact(s) left unchanged: ", preview, suffix)
+    )
+  }
+  invisible(legacy)
+}
+
+finalize_run_log <- function(status, error_message = NA_character_) {
+  status <- toupper(as.character(status))
+  if (!status %in% c("SUCCESS", "FAILED")) {
+    stop("Run log status must be SUCCESS or FAILED.", call. = FALSE)
+  }
+  if (identical(status, "FAILED") && !is.na(error_message) && nzchar(error_message)) {
+    append_run_log("ERROR", error_message)
+  }
+  append_run_log(
+    "SUMMARY",
+    paste0(
+      "artifacts=", length(.sqm_run_context$completed_artifacts),
+      " manifests=", length(.sqm_run_context$completed_manifests),
+      " warnings=", length(.sqm_run_context$warnings),
+      " skipped_pathways=", nrow(.sqm_run_context$pathway_skips)
+    )
+  )
+  finished_at <- Sys.time()
+  append_run_log("STATUS", paste0("STATUS=", status))
+  append_run_log("STATUS", paste0("FINISHED_AT=", format(finished_at, "%Y-%m-%dT%H:%M:%S%z")))
+  append_run_log(
+    "STATUS",
+    paste0("DURATION_SECONDS=", round(as.numeric(difftime(
+      finished_at,
+      .sqm_run_context$started_at,
+      units = "secs"
+    )), 3L))
+  )
+  invisible(.sqm_run_context$log_path)
 }
 
 stable_path_token <- function(value) {
@@ -779,6 +947,7 @@ assert_output_artifact <- function(path, label = "Output artifact") {
   if (isTRUE(artifact_info$isdir[[1L]]) || is.na(artifact_info$size[[1L]]) || artifact_info$size[[1L]] <= 0) {
     stop(label, " is not a non-empty regular file: ", path, call. = FALSE)
   }
+  record_completed_artifact(path)
   invisible(path)
 }
 
@@ -793,19 +962,12 @@ save_png_dimensions <- function(
   output_files <- character()
   for (dim_name in names(dimensions)) {
     dims <- dimensions[[dim_name]]
-    active_run_id <- current_run_id()
-    run_suffix_length <- if (is.na(active_run_id)) 0L else nchar(active_run_id) + 2L
-    effective_max_path_length <- max_path_length - run_suffix_length
-    if (effective_max_path_length <= 0L) {
-      stop("run_id leaves no room for a portable PNG filename.", call. = FALSE)
-    }
     output_file <- portable_png_output_path(
       output_dir,
       file_stem,
       dim_name,
-      max_path_length = effective_max_path_length
+      max_path_length = max_path_length
     )
-    output_file <- run_artifact_path(output_file)
     ggplot2::ggsave(
       filename = output_file,
       plot = plot_object,
@@ -822,7 +984,6 @@ save_png_dimensions <- function(
 }
 
 save_html_widget <- function(widget, path) {
-  path <- run_artifact_path(path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   dependency_dir <- paste0(tools::file_path_sans_ext(path), "_files")
   if (dir.exists(dependency_dir)) {
@@ -4925,11 +5086,7 @@ export_pathview_isolated <- function(
 
   dir.create(final_dir, recursive = TRUE, showWarnings = FALSE)
   relative_files <- substring(produced_files, nchar(temporary_dir_abs) + 2L)
-  final_files <- vapply(
-    file.path(final_dir, relative_files),
-    run_artifact_path,
-    character(1)
-  )
+  final_files <- file.path(final_dir, relative_files)
   for (file_index in seq_along(produced_files)) {
     dir.create(dirname(final_files[[file_index]]), recursive = TRUE, showWarnings = FALSE)
     copied <- file.copy(
@@ -5327,6 +5484,30 @@ normalize_legacy_pie_manifest <- function(manifest_tbl) {
     )
 }
 
+new_context_manifest_registry <- function(context_output_dir) {
+  registry <- new.env(parent = emptyenv())
+  registry$context_output_dir <- context_output_dir
+  registry$flow <- tibble::tibble()
+  registry$funz <- tibble::tibble()
+  registry$taxon <- tibble::tibble()
+  registry$pathview <- tibble::tibble()
+  registry$pie <- tibble::tibble()
+  registry
+}
+
+activate_context_manifest_registry <- function(registry) {
+  if (!is.environment(registry) || is.null(registry$context_output_dir)) {
+    stop("Invalid context manifest registry.", call. = FALSE)
+  }
+  .sqm_run_context$active_manifest_registry <- registry
+  invisible(registry)
+}
+
+clear_active_manifest_registry <- function() {
+  .sqm_run_context$active_manifest_registry <- NULL
+  invisible(TRUE)
+}
+
 read_section_manifest <- function(manifest_path, relative_dir) {
   if (!file.exists(manifest_path)) {
     return(tibble::tibble())
@@ -5464,12 +5645,89 @@ merge_section_manifest <- function(new_manifest_tbl, existing_manifest_tbl) {
     distinct(.data$output_file, .keep_all = TRUE)
 }
 
+write_tsv_atomic <- function(
+    data,
+    path,
+    readr_available = requireNamespace("readr", quietly = TRUE)) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  temporary_path <- tempfile(
+    pattern = paste0(".", basename(path), "."),
+    tmpdir = dirname(path)
+  )
+  backup_path <- tempfile(
+    pattern = paste0(".", basename(path), ".backup."),
+    tmpdir = dirname(path)
+  )
+  on.exit(unlink(c(temporary_path, backup_path), force = TRUE), add = TRUE)
+  write_tsv_contents(data, temporary_path, readr_available = readr_available)
+  temporary_info <- suppressWarnings(file.info(temporary_path))
+  if (!file.exists(temporary_path) || is.na(temporary_info$size[[1L]]) || temporary_info$size[[1L]] <= 0) {
+    stop("Atomic TSV staging did not create a non-empty file: ", path, call. = FALSE)
+  }
+
+  had_existing <- file.exists(path)
+  if (had_existing && !file.rename(path, backup_path)) {
+    stop("Unable to stage the existing TSV for replacement: ", path, call. = FALSE)
+  }
+  replaced <- file.rename(temporary_path, path)
+  if (!isTRUE(replaced)) {
+    if (had_existing) {
+      file.rename(backup_path, path)
+    }
+    stop("Unable to replace TSV atomically: ", path, call. = FALSE)
+  }
+  if (had_existing) {
+    unlink(backup_path, force = TRUE)
+  }
+  path
+}
+
 write_section_manifest <- function(manifest_tbl, output_dir, relative_dir, filename) {
-  validate_current_manifest_targets(manifest_tbl, output_dir)
   dir_path <- file.path(output_dir, relative_dir)
   dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
+  validate_current_manifest_targets(manifest_tbl, dir_path)
   manifest_path <- file.path(dir_path, filename)
-  write_tsv_safe(manifest_tbl, manifest_path)
+  write_tsv_atomic(manifest_tbl, manifest_path)
+  record_completed_manifest(manifest_path)
+  append_run_log(
+    "MANIFEST",
+    paste0("Wrote ", nrow(manifest_tbl), " row(s): ", normalizePath(manifest_path, winslash = "/", mustWork = TRUE))
+  )
+  manifest_path
+}
+
+flush_context_manifests <- function(registry) {
+  if (!is.environment(registry) || is.null(registry$context_output_dir)) {
+    stop("Invalid context manifest registry.", call. = FALSE)
+  }
+  section_contract <- list(
+    flow = c(directory = "flowplot", filename = "manifest_flow.tsv"),
+    funz = c(directory = "funz", filename = "manifest_funz.tsv"),
+    pie = c(directory = "pie", filename = "manifest_pie.tsv")
+  )
+  written <- character()
+  for (section in names(section_contract)) {
+    manifest_tbl <- registry[[section]]
+    if (is.null(manifest_tbl) || nrow(manifest_tbl) == 0L) {
+      next
+    }
+    contract <- section_contract[[section]]
+    written[[section]] <- write_section_manifest(
+      manifest_tbl = manifest_tbl,
+      output_dir = registry$context_output_dir,
+      relative_dir = unname(contract[["directory"]]),
+      filename = unname(contract[["filename"]])
+    )
+  }
+  written
+}
+
+flush_active_context_manifests <- function() {
+  registry <- .sqm_run_context$active_manifest_registry
+  if (is.null(registry)) {
+    return(character())
+  }
+  flush_context_manifests(registry)
 }
 
 write_combined_manifest <- function(
@@ -5860,18 +6118,13 @@ main_impl <- function() {
 
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
-  manifests <- list(
-    flow = tibble(),
-    funz = tibble(),
-    taxon = tibble(),
-    pathview = tibble(),
-    pie = tibble()
-  )
   script_name <- "sqm_plots.R"
 
   for (context in filter_contexts) {
     context_output_dir <- context$output_dir
     context_sqm <- context$sqm
+    manifests <- new_context_manifest_registry(context_output_dir)
+    activate_context_manifest_registry(manifests)
     progress_message(
       "Output context: ", context_output_dir,
       if (!is.na(context$filtered_taxon)) paste0(" | taxon filter=", context$filtered_taxon, " @ ", context$filtered_taxon_rank) else ""
@@ -5937,7 +6190,7 @@ main_impl <- function() {
       manifests <- run_taxonomy_scope(
         sqm_object = context_sqm,
         output_dir = context_output_dir,
-        manifest_base_dir = output_dir,
+        manifest_base_dir = context_output_dir,
         output_manifests = manifests,
         script_name = script_name,
         project_dir = project_dir,
@@ -5981,7 +6234,7 @@ main_impl <- function() {
       if (mode %in% c("all", "funz")) {
         manifests <- run_funz_mode(
           output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
+          manifest_base_dir = file.path(context_output_dir, "funz"),
           output_manifests = manifests,
           script_name = script_name,
           project_dir = project_dir,
@@ -6004,7 +6257,7 @@ main_impl <- function() {
       if (mode %in% c("all", "flow")) {
         manifests <- run_flow_mode(
           output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
+          manifest_base_dir = file.path(context_output_dir, "flowplot"),
           output_manifests = manifests,
           script_name = script_name,
           project_dir = project_dir,
@@ -6027,10 +6280,10 @@ main_impl <- function() {
       }
 
       if (mode %in% c("all", "taxon")) {
-        manifests <- run_taxonomy_scope(
-          sqm_object = pathway_analysis$pathway_sqm,
-          output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
+          manifests <- run_taxonomy_scope(
+            sqm_object = pathway_analysis$pathway_sqm,
+            output_dir = context_output_dir,
+            manifest_base_dir = context_output_dir,
           output_manifests = manifests,
           script_name = script_name,
           project_dir = project_dir,
@@ -6067,7 +6320,7 @@ main_impl <- function() {
           manifests <- run_pathview_mode(
             sqm_object = context_sqm,
             output_dir = context_output_dir,
-            manifest_base_dir = output_dir,
+            manifest_base_dir = context_output_dir,
             output_manifests = manifests,
             script_name = script_name,
             project_dir = project_dir,
@@ -6088,7 +6341,7 @@ main_impl <- function() {
       if (pie_enabled) {
         manifests <- run_pie_mode(
           output_dir = context_output_dir,
-          manifest_base_dir = output_dir,
+          manifest_base_dir = file.path(context_output_dir, "pie"),
           output_manifests = manifests,
           script_name = script_name,
           project_dir = project_dir,
@@ -6115,7 +6368,7 @@ main_impl <- function() {
       manifests <- run_enzyme_mode(
         sqm_object = context_sqm,
         output_dir = context_output_dir,
-        manifest_base_dir = output_dir,
+        manifest_base_dir = file.path(context_output_dir, "funz"),
         output_manifests = manifests,
         script_name = script_name,
         project_dir = project_dir,
@@ -6132,33 +6385,12 @@ main_impl <- function() {
         filtered_taxon_rank = context$filtered_taxon_rank
       )
     }
+    flush_context_manifests(manifests)
+    clear_active_manifest_registry()
   }
-
-  manifest_paths <- character()
-  if (nrow(manifests$flow) > 0L) {
-    manifest_paths[["flow"]] <- write_section_manifest(manifests$flow, output_dir, "flowplot", "manifest_flow.tsv")
-  }
-  if (nrow(manifests$funz) > 0L) {
-    manifest_paths[["funz"]] <- write_section_manifest(manifests$funz, output_dir, "funz", "manifest_funz.tsv")
-  }
-  if (nrow(manifests$taxon) > 0L) {
-    manifest_paths[["taxon"]] <- write_section_manifest(manifests$taxon, output_dir, "", "manifest_taxon.tsv")
-  }
-  if (nrow(manifests$pathview) > 0L) {
-    manifest_paths[["pathview"]] <- write_section_manifest(manifests$pathview, output_dir, "pathview", "manifest_pathview.tsv")
-  }
-  if (nrow(manifests$pie) > 0L) {
-    manifest_paths[["pie"]] <- write_section_manifest(manifests$pie, output_dir, "pie", "manifest_pie.tsv")
-  }
-
-  manifest_all_path <- write_combined_manifest(
-    output_dir,
-    section_manifest_paths = manifest_paths
-  )
 
   message("Output directory: ", output_dir)
-  message("Combined manifest: ", manifest_all_path)
-  invisible(list(status = 0L, manifest_all_path = manifest_all_path))
+  invisible(list(status = 0L))
 }
 
 main <- function() {
@@ -6201,6 +6433,14 @@ main <- function() {
   tax_mode <- bootstrap_cli_value(args, "tax_mode")
   if (is.null(tax_mode)) tax_mode <- "prokfilter"
 
+  log_path <- initialize_run_log(
+    output_dir = output_dir,
+    project_dir = project_dir,
+    mode = mode,
+    tax_mode = tax_mode
+  )
+  record_legacy_outputs(output_dir)
+
   run_error <- NULL
   result <- tryCatch(
     withCallingHandlers(
@@ -6216,25 +6456,26 @@ main <- function() {
   )
 
   if (!is.null(run_error)) {
-    write_failed_run_manifests(
-      output_dir = output_dir,
-      project_dir = project_dir,
-      mode = mode,
-      tax_mode = tax_mode,
-      error_message = conditionMessage(run_error)
+    partial_manifest_error <- tryCatch(
+      {
+        flush_active_context_manifests()
+        NULL
+      },
+      error = function(error) error
     )
+    if (!is.null(partial_manifest_error)) {
+      append_run_log(
+        "ERROR",
+        paste0("Unable to flush partial section manifests: ", conditionMessage(partial_manifest_error))
+      )
+    }
+    finalize_run_log("FAILED", conditionMessage(run_error))
     stop(run_error)
   }
 
-  run_manifest <- write_success_run_manifest(
-    output_dir = output_dir,
-    project_dir = project_dir,
-    mode = mode,
-    tax_mode = tax_mode,
-    combined_manifest = result$manifest_all_path
-  )
+  finalize_run_log("SUCCESS")
   message("Run ID: ", run_id)
-  message("Run manifest: ", run_manifest)
+  message("Run log: ", log_path)
   invisible(result$status)
 }
 

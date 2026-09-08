@@ -124,7 +124,7 @@ script_env$progress_message("test progress")
 script_env$record_run_warning("test warning")
 script_env$finalize_run_log("SUCCESS")
 
-legacy_manifest <- write_fixture(file.path(test_root, "manifest_all__legacy.tsv"), "legacy")
+legacy_manifest <- write_fixture(file.path(test_root, paste0("manifest_all__", run_a, ".tsv")), "legacy")
 legacy_before <- read_bytes(legacy_manifest)
 script_env$set_run_context(
   run_b,

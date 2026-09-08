@@ -269,32 +269,13 @@ run_case("analytical CLI reports missing packages in a failed-run manifest", {
     dir.exists(output_dir),
     "Dependency preflight did not initialize failed-run provenance"
   )
-  run_manifests <- list.files(
-    output_dir,
-    pattern = "^manifest_run__.*\\.tsv$",
-    full.names = TRUE
-  )
-  failure_manifests <- list.files(
-    output_dir,
-    pattern = "^manifest_failed_artifacts__.*\\.tsv$",
-    full.names = TRUE
-  )
+  run_logs <- list.files(output_dir, pattern = "^[0-9]{8}T.*\\.log$", full.names = TRUE)
+  expect_true(length(run_logs) == 1L, "Dependency preflight did not write one failure log")
+  run_log <- paste(readLines(run_logs[[1L]], warn = FALSE), collapse = "\n")
   expect_true(
-    length(run_manifests) == 1L && length(failure_manifests) == 1L,
-    "Dependency preflight did not write isolated failure manifests"
-  )
-  run_metadata <- utils::read.delim(
-    run_manifests[[1L]],
-    sep = "\t",
-    header = TRUE,
-    stringsAsFactors = FALSE,
-    na.strings = "NA",
-    check.names = FALSE
-  )
-  expect_true(
-    identical(run_metadata$status, "failed") &&
-      grepl("Missing required R packages", run_metadata$error_message, fixed = TRUE),
-    "Dependency preflight failure metadata is incomplete"
+    grepl("STATUS=FAILED", run_log, fixed = TRUE) &&
+      grepl("Missing required R packages", run_log, fixed = TRUE),
+    "Dependency preflight failure log is incomplete"
   )
   expect_true(
     !grepl("Loading SQM project", output_text, fixed = TRUE),
@@ -345,32 +326,13 @@ run_case("malformed CLI after output_dir writes a failed-run manifest", {
     dir.exists(output_dir),
     "Recoverable output_dir was not initialized after a later parse error"
   )
-  run_manifests <- list.files(
-    output_dir,
-    pattern = "^manifest_run__.*\\.tsv$",
-    full.names = TRUE
-  )
-  failure_manifests <- list.files(
-    output_dir,
-    pattern = "^manifest_failed_artifacts__.*\\.tsv$",
-    full.names = TRUE
-  )
+  run_logs <- list.files(output_dir, pattern = "^[0-9]{8}T.*\\.log$", full.names = TRUE)
+  expect_true(length(run_logs) == 1L, "A parse error after output_dir did not produce one failure log")
+  run_log <- paste(readLines(run_logs[[1L]], warn = FALSE), collapse = "\n")
   expect_true(
-    length(run_manifests) == 1L && length(failure_manifests) == 1L,
-    "A parse error after output_dir did not produce isolated failure manifests"
-  )
-  run_metadata <- utils::read.delim(
-    run_manifests[[1L]],
-    sep = "\t",
-    header = TRUE,
-    stringsAsFactors = FALSE,
-    na.strings = "NA",
-    check.names = FALSE
-  )
-  expect_true(
-    identical(run_metadata$status, "failed") &&
-      grepl("Missing value for argument: --taxa", run_metadata$error_message, fixed = TRUE),
-    "Malformed CLI failure metadata is incomplete"
+    grepl("STATUS=FAILED", run_log, fixed = TRUE) &&
+      grepl("Missing value for argument: --taxa", run_log, fixed = TRUE),
+    "Malformed CLI failure log is incomplete"
   )
 })
 

@@ -119,7 +119,7 @@ manifest_a <- script_env$write_section_manifest(
   "",
   "manifest_taxon.tsv"
 )
-stopifnot(identical(basename(manifest_a), paste0("manifest_taxon__", run_id, ".tsv")))
+stopifnot(identical(basename(manifest_a), "manifest_taxon.tsv"))
 
 run_id_b <- sub("a7f3$", "b8e4", run_id)
 script_env$set_run_context(

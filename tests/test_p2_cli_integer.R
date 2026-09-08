@@ -135,29 +135,16 @@ run_case("invalid integer CLI values fail before SQM loading and write a failed-
       any(grepl(option_name, cli_output, fixed = TRUE)),
       paste0("Invalid --", option_name, " error did not identify the option")
     )
-    run_manifests <- list.files(
-      output_dir,
-      pattern = "^manifest_run__.*\\.tsv$",
-      full.names = TRUE
-    )
-    failure_manifests <- list.files(
-      output_dir,
-      pattern = "^manifest_failed_artifacts__.*\\.tsv$",
-      full.names = TRUE
-    )
+    run_logs <- list.files(output_dir, pattern = "^[0-9]{8}T.*\\.log$", full.names = TRUE)
     expect_true(
-      length(run_manifests) == 1L && length(failure_manifests) == 1L,
-      paste0("Invalid --", option_name, " did not write isolated failure manifests")
+      length(run_logs) == 1L,
+      paste0("Invalid --", option_name, " did not write one isolated failure log")
     )
-    run_metadata <- readr::read_tsv(
-      run_manifests[[1L]],
-      show_col_types = FALSE,
-      na = "NA"
-    )
+    run_log <- paste(readLines(run_logs[[1L]], warn = FALSE), collapse = "\n")
     expect_true(
-      identical(run_metadata$status, "failed") &&
-        grepl(option_name, run_metadata$error_message, fixed = TRUE),
-      paste0("Invalid --", option_name, " wrote incorrect failure metadata")
+      grepl("STATUS=FAILED", run_log, fixed = TRUE) &&
+        grepl(option_name, run_log, fixed = TRUE),
+      paste0("Invalid --", option_name, " wrote incorrect failure log metadata")
     )
   }
 })

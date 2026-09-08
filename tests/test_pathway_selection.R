@@ -169,7 +169,7 @@ fake_pie_sqm$misc <- list(
 
 pie_result <- script_env$run_pie_mode(
   output_dir = test_root,
-  manifest_base_dir = test_root,
+  manifest_base_dir = file.path(test_root, "pie"),
   output_manifests = list(pie = tibble::tibble()),
   script_name = "sqm_plots.R",
   project_dir = "project",
