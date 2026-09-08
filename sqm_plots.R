@@ -3653,7 +3653,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     )
 }
 
-make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
+make_flow_sankey_with_detailed_labels <- function(flow_tbl, pathway_name, rank, sample_name) {
   tax_labels <- levels(flow_tbl$taxon)
   ko_labels <- levels(flow_tbl$KO)
   legend_spec <- build_flow_legend_spec(flow_tbl)
@@ -3722,6 +3722,67 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
         text = paste0(
           "Flowplot - ", pathway_name, " - ", rank, " - ", sample_name,
           "<br><sup>ORF-linked taxon -> KO / EC flow based on TPM</sup>"
+        )
+      ),
+      font = list(size = 11),
+      margin = list(l = 20, r = 20, t = 60, b = 20)
+    )
+}
+
+make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
+  tax_labels <- levels(flow_tbl$taxon)
+  ko_labels <- levels(flow_tbl$KO)
+  ko_display_labels <- ifelse(ko_labels == "Other", "Other KOs", ko_labels)
+  taxon_palette <- build_flow_color_map(tax_labels, character())
+  taxon_percents <- stats::setNames(
+    flow_tbl$taxon_percent[match(tax_labels, as.character(flow_tbl$taxon))],
+    tax_labels
+  )
+  functional_percents <- stats::setNames(
+    flow_tbl$KO_percent[match(ko_labels, as.character(flow_tbl$KO))],
+    ko_labels
+  )
+
+  plotly::plot_ly(
+    type = "sankey",
+    arrangement = "snap",
+    valueformat = ".2f",
+    valuesuffix = "%",
+    node = list(
+      pad = 18,
+      thickness = 18,
+      line = list(color = "rgba(70,70,70,0.35)", width = 0.5),
+      label = c(tax_labels, ko_display_labels),
+      color = rep("rgba(245,245,245,1)", length(tax_labels) + length(ko_labels))
+    ),
+    link = list(
+      source = match(as.character(flow_tbl$taxon), tax_labels) - 1L,
+      target = length(tax_labels) + match(as.character(flow_tbl$KO), ko_labels) - 1L,
+      value = flow_tbl$flow_percent,
+      color = unname(grDevices::adjustcolor(
+        taxon_palette[as.character(flow_tbl$taxon)],
+        alpha.f = 0.65
+      )),
+      customdata = paste0(
+        "Taxon: ", flow_tbl$taxon,
+        "<br>Taxon share: ",
+        format_ko_sample_percent(unname(taxon_percents[as.character(flow_tbl$taxon)])),
+        "<br>KO: ", flow_tbl$KO,
+        "<br>EC: ", ifelse(is.na(flow_tbl$ec_codes), "NA", flow_tbl$ec_codes),
+        "<br>Function: ", flow_tbl$KO_name,
+        "<br>Function share: ",
+        format_ko_sample_percent(unname(functional_percents[as.character(flow_tbl$KO)])),
+        "<br>TPM: ", sprintf("%.3f", flow_tbl$TPM),
+        "<br>Flow: ", sprintf("%.2f", flow_tbl$flow_percent), "%"
+      ),
+      hovertemplate = "%{customdata}<extra></extra>"
+    )
+  ) |>
+    plotly::layout(
+      title = list(
+        text = paste0(
+          "Flowplot - ", pathway_name, " - ", rank, " - ", sample_name,
+          "<br><sup>Taxonomy-to-KO flow based on TPM</sup>"
         )
       ),
       font = list(size = 11),
