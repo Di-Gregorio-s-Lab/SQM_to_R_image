@@ -23,7 +23,7 @@ flow_fixture <- tibble::tibble(
 )
 
 taxon_categories <- levels(flow_fixture$taxon)
-taxon_palette <- script_env$build_flow_color_map(taxon_categories, character())
+taxon_palette <- script_env$build_flow_taxon_colors(taxon_categories)
 if (!identical(names(taxon_palette), taxon_categories)) {
   stop("Simple FLOW palette does not follow taxonomy factor order.", call. = FALSE)
 }
@@ -91,7 +91,7 @@ if (!identical(observed_link_colors, expected_link_colors)) {
 
 base_color_count <- length(unique(script_env$colors_hex))
 overflow_categories <- paste0("Taxon_", seq_len(base_color_count + 1L))
-overflow_palette <- script_env$build_flow_color_map(overflow_categories, character())
+overflow_palette <- script_env$build_flow_taxon_colors(overflow_categories)
 if (anyNA(overflow_palette) || anyDuplicated(toupper(unname(overflow_palette)))) {
   stop("Simple FLOW palette overflow produced missing or recycled colors.", call. = FALSE)
 }

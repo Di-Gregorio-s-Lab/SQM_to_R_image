@@ -19,7 +19,6 @@ coverage_table <- as.data.frame(coverage)
 target_functions <- c(
   "required_packages_for_mode",
   "check_required_packages",
-  "check_flow_html_preflight",
   "stable_path_token",
   "safe_output_component",
   "taxonomy_file_stem",

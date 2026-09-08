@@ -16,13 +16,6 @@ required_packages_for_mode("flow", "html")
 required_packages_for_mode("pie", "png")
 required_packages_for_mode("pathview", "png")
 required_packages_for_mode("all", c("png", "html"))
-check_flow_html_preflight("flow", "html", pandoc_available_fn = function() TRUE)
-check_flow_html_preflight("flow", "png", pandoc_available_fn = function() FALSE)
-try(
-  check_flow_html_preflight("flow", "html", pandoc_available_fn = function() FALSE),
-  silent = TRUE
-)
-
 coverage_root <- tempfile("p3_cov_")
 dir.create(coverage_root, recursive = TRUE)
 on.exit(unlink(coverage_root, recursive = TRUE, force = TRUE), add = TRUE)

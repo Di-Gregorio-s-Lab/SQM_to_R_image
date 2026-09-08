@@ -257,64 +257,6 @@ legend_orfs <- tibble::tibble(
   phylum = c("Alpha", "Alpha", "Beta", "Beta")
 )
 
-run_case("FLOW legend module exposes taxonomy and KO/EC percentages", {
-  build_flow_legend_spec <- require_script_function(
-    script_env,
-    "build_flow_legend_spec"
-  )
-  rank_tbl <- script_env$build_flow_table_for_rank(
-    orf_long = legend_orfs,
-    rank = "phylum",
-    selected_samples = "S_legend",
-    top_n_taxa = 2L,
-    top_n_ko = 2L,
-    ko_lookup = character()
-  )
-  sample_tbl <- script_env$build_flow_table_for_sample(
-    rank_tbl,
-    "Synthetic pathway",
-    "phylum",
-    "S_legend"
-  )
-  expect_true(
-    "ec_codes" %in% colnames(sample_tbl),
-    "The append-only FLOW TSV schema is missing ec_codes"
-  )
-
-  legend_spec <- build_flow_legend_spec(sample_tbl)
-  expect_identical(
-    names(legend_spec),
-    c("taxonomy", "functional"),
-    "FLOW legend module changed its two-section interface"
-  )
-  expect_identical(
-    legend_spec$taxonomy$label,
-    c("Beta | 40.0%", "Alpha | 60.0%"),
-    "Taxonomy legend labels or factor order changed"
-  )
-  expect_identical(
-    legend_spec$functional$label,
-    c(
-      "K00002 / EC NA | 30.0%",
-      "K00001 / EC 1.1.1.1;2.2.2.2 | 60.0%",
-      "Other KOs | 10.0%"
-    ),
-    "Functional KO/EC legend labels or factor order changed"
-  )
-  expect_number(
-    sum(legend_spec$taxonomy$percent),
-    100,
-    "Taxonomy legend percentages do not sum to 100",
-    tolerance = 1e-6
-  )
-  expect_number(
-    sum(legend_spec$functional$percent),
-    100,
-    "Functional legend percentages do not sum to 100",
-    tolerance = 1e-6
-  )
-})
-
 run_case("FLOW PNG uses the simple legend-free renderer", {
   rank_tbl <- script_env$build_flow_table_for_rank(
     legend_orfs,

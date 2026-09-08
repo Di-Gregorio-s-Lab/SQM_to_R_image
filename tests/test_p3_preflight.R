@@ -126,25 +126,6 @@ run_case("required packages are selected from mode and FLOW format", {
   )
 })
 
-run_case("FLOW HTML preflight does not require Pandoc", {
-  expect_true(
-    isTRUE(script_env$check_flow_html_preflight(
-      "flow",
-      "html",
-      pandoc_available_fn = function() FALSE
-    )),
-    "Non-self-contained FLOW HTML unexpectedly required Pandoc"
-  )
-  expect_true(
-    isTRUE(script_env$check_flow_html_preflight(
-      "flow",
-      "png",
-      pandoc_available_fn = function() FALSE
-    )),
-    "PNG-only FLOW unnecessarily required Pandoc"
-  )
-})
-
 run_case("help and no-argument CLI work with no optional R libraries", {
   test_root <- tempfile("p3_preflight_help_")
   empty_user_library <- file.path(test_root, "empty-user-library")
