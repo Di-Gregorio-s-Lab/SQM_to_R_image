@@ -18,6 +18,11 @@ stopifnot(
   identical(config$pathview_sample_modes, c("insieme", "separato"))
 )
 
+without_pie <- script_env$build_config(script_env$parse_args(c(
+  "--project_dir", "in/Au_sip", "--output_dir", "out/lean", "--mode", "funz,flow,taxon,pathview"
+)))
+stopifnot(identical(without_pie$mode, c("funz", "flow", "taxon", "pathview")))
+
 failed <- FALSE
 tryCatch(
   script_env$build_config(script_env$parse_args(c(
