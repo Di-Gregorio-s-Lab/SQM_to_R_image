@@ -93,10 +93,11 @@ if (is.null(rownames(sqm$orfs$table)) ||
 | ID KO | `sqm$orfs$table[["KEGG ID"]]` |
 | Nome/descrizione funzionale | `sqm$orfs$table[["KEGGFUN"]]` |
 | Codice o codici EC | estrazione da `sqm$orfs$table[["KEGGFUN"]]` |
-| Appartenenza ai pathway | `sqm$orfs$table[["KEGGPATH"]]` |
+| Totali KO per campione | `sqm$functions$KEGG$tpm` |
+| Appartenenza ai pathway | KO dei nodi `ortholog` del KGML KEGG |
 | Tassonomia per ORF | `sqm$orfs$tax` |
 | TPM per ORF e campione | `sqm$orfs$tpm` |
-| Nomi e gerarchie KEGG di fallback | `sqm$misc$KEGG_names`, `sqm$misc$KEGG_paths` |
+| Nomi KO e gerarchie per il ranking Top 20 | `sqm$misc$KEGG_names`, `sqm$misc$KEGG_paths` |
 
 ### 3.1 KO
 
@@ -144,34 +145,15 @@ ec_codes <- ifelse(
 
 ## 4. Selezione del pathway
 
-Usare `subsetFun()` dopo `loadSQM()`, filtrando `KEGGPATH`.
+L'appartenenza funzionale a un pathway deriva esclusivamente dai KO presenti
+nei nodi `ortholog` del relativo KGML KEGG. Estrarre ID `K[0-9]{5}`, rimuovere
+i duplicati e selezionare gli ORF la cui colonna `KEGG ID` contiene almeno uno
+di questi KO. I nodi compound e gli altri tipi KGML non appartengono al set KO.
 
-Il confronto richiesto è letterale e case-insensitive. In R,
-`grepl(..., fixed = TRUE)` ignora `ignore.case = TRUE`; pertanto non passare
-direttamente questa combinazione a `subsetFun()`.
-
-Procedura:
-
-1. estrarre i nomi canonici dei pathway da `sqm$misc$KEGG_paths`;
-2. confrontare `tolower(nome_canonico)` con `tolower(nome_richiesto)`;
-3. richiedere una sola corrispondenza esatta; con zero o più corrispondenze
-   terminare mostrando i candidati utili;
-4. passare il nome canonico a:
-
-```r
-pathway_sqm <- SQMtools::subsetFun(
-  SQM = sqm,
-  fun = canonical_pathway_name,
-  columns = "KEGGPATH",
-  ignore_case = FALSE,
-  fixed = TRUE,
-  allow_empty = TRUE
-)
-```
-
-Non usare il codice numerico del pathway come filtro se `KEGGPATH` contiene
-solo la descrizione testuale. Gestire più pathway iterando su nomi canonici e
-creando una sottodirectory distinta per ciascuno.
+`KEGGPATH` e `sqm$misc$KEGG_paths` servono soltanto a classificare, nominare e
+ordinare i pathway candidati per il ranking Top 20: non devono filtrare ORF né
+stabilire la membership del pathway. Gestire più pathway iterando sugli ID
+canonici a cinque cifre e creando una sottodirectory distinta per ciascuno.
 
 ## 5. Tabella lunga ORF × campione × KO
 
@@ -203,20 +185,22 @@ Procedura:
 6. convertire `tpm` in numerico e mantenere soltanto valori non `NA` e
    strettamente positivi;
 7. estrarre i KO da `KEGG ID`;
-8. espandere gli ORF multi-KO su più righe;
-9. sostituire valori tassonomici mancanti o vuoti con `Unclassified`.
+8. dividere il TPM di ogni ORF equamente tra tutti i suoi KO;
+9. espandere gli ORF multi-KO e solo dopo filtrare i KO appartenenti al KGML;
+10. riscalare le quote tassonomiche di ogni KO al corrispondente margine
+    ufficiale in `sqm$functions$KEGG$tpm`;
+11. sostituire valori tassonomici mancanti o vuoti con `Unclassified`.
 
 ### 5.1 Regola per gli ORF multi-KO
 
-Se un ORF ha più KO, ciascun KO riceve l'intero TPM dell'ORF. Non dividere il
-TPM per il numero di KO.
+Se un ORF ha più KO, dividere il suo TPM equamente tra tutti i KO annotati
+prima di applicare il filtro di membership del pathway. La somma delle quote
+prima del filtro deve coincidere con il TPM originale dell'ORF.
 
-Questa scelta può aumentare il totale dopo l'espansione. Di conseguenza:
-
-- il comportamento va dichiarato nei commenti dello script e nei metadati;
-- i denominatori delle percentuali KO devono essere calcolati sulla tabella
-  espansa, così le categorie mostrate sommano coerentemente a 100%;
-- non descrivere il metodo come “TPM diviso equamente tra i KO”.
+Per ogni coppia KO-campione, usare poi queste quote soltanto per determinare le
+proporzioni tassonomiche e riscalarle affinché la loro somma coincida con il
+margine ufficiale `sqm$functions$KEGG$tpm`. Un margine ufficiale positivo
+senza ORF allocabili è un errore, non un valore da stimare o ignorare.
 
 Gli ORF senza KO vengono esclusi dalle analisi KO e dai flowplot, ma possono
 restare in analisi esclusivamente tassonomiche se coerente con l'obiettivo
@@ -246,10 +230,10 @@ il denominatore.
 
 | Misura | Formula |
 |---|---|
-| quota KO nel pathway | `KO_TPM / pathway_TPM` nello stesso campione |
-| composizione tassonomica di un KO | `taxon_KO_TPM / KO_TPM` nello stesso campione |
-| quota di un arco taxon → KO | `edge_TPM / pathway_TPM` nello stesso campione |
-| composizione tassonomica del pathway | `taxon_TPM / pathway_TPM` nello stesso campione |
+| quota KO nel pathway | `KO_TPM_ufficiale / somma_KO_TPM_ufficiali_del_pathway` nello stesso campione |
+| composizione tassonomica di un KO | `taxon_KO_TPM_riscalato / KO_TPM_ufficiale` nello stesso campione |
+| quota di un arco taxon → KO | `edge_TPM_riscalato / somma_KO_TPM_ufficiali_del_pathway` nello stesso campione |
+| composizione tassonomica del pathway | `taxon_TPM_riscalato / somma_KO_TPM_ufficiali_del_pathway` nello stesso campione |
 
 Non dividere mai il valore di un singolo campione per il totale sommato su
 tutti i campioni, salvo che l'analisi richieda esplicitamente una percentuale
@@ -369,11 +353,11 @@ Usare `stop(..., call. = FALSE)` per:
 - matrici sorgente vuote o chiavi ORF duplicate/mancanti;
 - opzioni CLI non valide.
 
-Chiamare `subsetFun(..., allow_empty=TRUE)`. Usare
-`warning(..., call. = FALSE)` e saltare soltanto la combinazione interessata
-quando un pathway valido produce un subset vuoto o non contiene righe positive
-per uno specifico campione, rango o grafico. Un pathway vuoto non deve bloccare
-la tassonomia globale o altre modalità indipendenti.
+Consentire una membership KGML vuota. Usare `warning(..., call. = FALSE)` e
+saltare soltanto la combinazione interessata quando un pathway valido non
+contiene KO `ortholog` allocabili o righe positive per uno specifico campione,
+rango o grafico. Un pathway vuoto non deve bloccare la tassonomia globale o
+altre modalità indipendenti.
 
 I messaggi finali devono indicare chiaramente la directory di output e i
 manifest creati.
@@ -386,8 +370,9 @@ manifest creati.
 | Estrarre `Kxxxxx` da `KEGGFUN` | `KEGGFUN` contiene la descrizione | usare `KEGG ID` |
 | Cercare gli EC in `KEGG ID` | l'ID KO non contiene l'annotazione EC | estrarre `[EC:...]` da `KEGGFUN` |
 | Leggere direttamente `*.orf.tax.*.tsv` e `*.KO.names.tsv` | duplica logica già offerta da `loadSQM()` | usare `orfs$tax`, `KEGGFUN` e `misc` |
-| Filtrare manualmente `KEGGPATH` in alcuni script e con `subsetFun()` in altri | produce sottoinsiemi non uniformi | risolvere il nome canonico e usare `subsetFun()` |
-| Dichiarare che i multi-KO sono divisi, ma duplicare il TPM | documentazione e risultati divergono | assegnare esplicitamente il TPM intero a ciascun KO |
+| Usare `KEGGPATH` o `subsetFun()` per stabilire la membership | diverge dai nodi realmente disegnati da KEGG | usare soltanto i KO dei nodi `ortholog` KGML |
+| Assegnare a ogni KO l'intero TPM di un ORF multi-KO | gonfia le proporzioni grezze | dividere prima tra tutti i KO, poi filtrare il pathway |
+| Usare la somma ORF come totale funzionale KO | può divergere dall'oracolo SQMtools | usare `sqm$functions$KEGG$tpm` e riscalare le quote tassonomiche al suo margine |
 | Calcolare la contribuzione di un campione sul totale di tutti i campioni | il denominatore non rappresenta il campione | usare il totale del pathway nello stesso campione |
 | Selezionare Top N diversi nello stesso grafico multicampione | colori e categorie non sono confrontabili | graduatoria globale sui campioni mostrati |
 | Usare insieme `fixed=TRUE` e `ignore_case=TRUE` | R ignora `ignore.case` in questa combinazione | risolvere prima il nome canonico |
@@ -400,10 +385,12 @@ manifest creati.
 - [ ] Input e output sono passati tramite CLI.
 - [ ] L'importazione usa `loadSQM()` con opzioni esplicite.
 - [ ] KO, funzione ed EC provengono dalle colonne corrette.
-- [ ] Il pathway è selezionato tramite nome canonico e `subsetFun()`.
+- [ ] La membership del pathway usa soltanto i KO dei nodi `ortholog` KGML.
+- [ ] `KEGGPATH` è usato soltanto per classificare e ordinare i Top 20.
 - [ ] I join usano `orf_id` e verificano le chiavi.
 - [ ] Il valore quantitativo è realmente TPM.
-- [ ] Il comportamento multi-KO è TPM intero per ogni KO.
+- [ ] Il TPM multi-KO è diviso prima del filtro pathway.
+- [ ] I totali KO coincidono con `sqm$functions$KEGG$tpm`.
 - [ ] Top N e denominatori sono coerenti tra campioni.
 - [ ] `Unclassified` e `Other` mantengono significati distinti.
 - [ ] Ogni grafico ha TSV sorgente e manifest.
@@ -417,15 +404,15 @@ Con `in/Au_sip` e l'ambiente `r_env`, la validazione iniziale ha osservato:
 - `945388` ORF nell'oggetto completo;
 - `3` campioni: `S13_1_8`, `S13_2_8`, `S13_3_8`;
 - presenza di `orfs$table`, `orfs$tax` e `orfs$tpm`;
-- `473` ORF dopo il filtro canonico
-  `Chlorocyclohexane and chlorobenzene degradation`;
-- `22` KO nel sottoinsieme;
-- coincidenza, entro la tolleranza numerica, tra la somma manuale dei TPM per
-  KO e `pathway_sqm$functions$KEGG$tpm` per questo sottoinsieme;
-- nessun ORF multi-KO nel pathway di prova, quindi la regola multi-KO deve
-  essere controllata anche con un caso minimo costruito in memoria;
+- membership del pathway ricavata dai soli nodi `ortholog` KGML, senza usare
+  `KEGGPATH` come filtro;
+- coincidenza, entro la tolleranza numerica, tra i totali prodotti e i margini
+  KO ufficiali `sqm$functions$KEGG$tpm`;
+- conservazione del TPM grezzo dividendo gli ORF multi-KO prima del filtro e
+  conservazione del margine ufficiale dopo il riscalamento tassonomico;
 - presenza di funzioni con più EC, per esempio
   `[EC:1.1.1.4 1.1.1.- 1.1.1.303]`.
 
-Questi numeri servono come smoke test del dataset attuale, non come costanti da
-inserire negli script di analisi.
+Queste osservazioni, validate dal motore canonico il 7 settembre 2026, servono
+come smoke test del dataset attuale e non come costanti da inserire negli
+script di analisi.
