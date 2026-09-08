@@ -3527,7 +3527,7 @@ build_flow_color_map <- function(taxon_levels, ko_levels) {
   )
 }
 
-make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
+make_flow_plot_with_legends <- function(flow_tbl, pathway_name, rank, sample_name) {
   taxon_levels <- levels(flow_tbl$taxon)
   ko_levels <- levels(flow_tbl$KO)
   legend_spec <- build_flow_legend_spec(flow_tbl)
@@ -3594,6 +3594,59 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
       legend.title = element_text(face = "bold"),
       legend.text = element_text(size = 8),
       legend.key.size = grid::unit(0.55, "lines"),
+      axis.text.y = element_blank(),
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "bold")
+    )
+}
+
+make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
+  taxon_levels <- levels(flow_tbl$taxon)
+  ko_levels <- levels(flow_tbl$KO)
+  ko_display_levels <- ifelse(ko_levels == "Other", "Other KOs", ko_levels)
+  plot_tbl <- flow_tbl |>
+    mutate(
+      taxon = factor(as.character(.data$taxon), levels = taxon_levels),
+      KO_display = if_else(
+        as.character(.data$KO) == "Other",
+        "Other KOs",
+        as.character(.data$KO)
+      ),
+      KO_display = factor(.data$KO_display, levels = ko_display_levels)
+    )
+  taxon_palette <- build_flow_color_map(taxon_levels, character())
+
+  ggplot(
+    plot_tbl,
+    aes(axis1 = .data$taxon, axis2 = .data$KO_display, y = .data$flow_percent)
+  ) +
+    ggalluvial::geom_alluvium(
+      aes(fill = .data$taxon),
+      alpha = 0.72,
+      width = 1 / 12
+    ) +
+    ggalluvial::geom_stratum(
+      width = 1 / 5,
+      fill = "grey95",
+      color = "grey35",
+      linewidth = 0.25
+    ) +
+    geom_text(
+      stat = ggalluvial::StatStratum,
+      aes(label = after_stat(stratum)),
+      size = 2.8
+    ) +
+    scale_fill_manual(values = taxon_palette, drop = FALSE, guide = "none") +
+    scale_x_discrete(limits = c("Taxon", "KO"), expand = c(0.08, 0.08)) +
+    labs(
+      title = paste0("Flowplot - ", pathway_name, " - ", rank, " - ", sample_name),
+      subtitle = "Taxonomy-to-KO flow from the ORF x sample x KO table",
+      x = NULL,
+      y = "Relative flow (%)"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "none",
       axis.text.y = element_blank(),
       panel.grid = element_blank(),
       plot.title = element_text(face = "bold")
