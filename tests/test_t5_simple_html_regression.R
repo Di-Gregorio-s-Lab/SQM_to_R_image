@@ -96,3 +96,29 @@ if (second_dependency_count != first_dependency_count) {
 }
 
 message("PASS: FLOW HTML creates and overwrites its support directory")
+
+html_requirements <- script_env$required_packages_for_mode("flow", "html")
+png_requirements <- script_env$required_packages_for_mode("flow", "png")
+if ("rmarkdown" %in% html_requirements) {
+  stop("Non-self-contained FLOW HTML must not require rmarkdown.", call. = FALSE)
+}
+if ("ggnewscale" %in% png_requirements) {
+  stop("Simple FLOW PNG without legends must not require ggnewscale.", call. = FALSE)
+}
+pandoc_result <- tryCatch(
+  script_env$check_flow_html_preflight(
+    mode = "flow",
+    flowplot_formats = "html",
+    pandoc_available_fn = function() FALSE
+  ),
+  error = identity
+)
+if (inherits(pandoc_result, "error")) {
+  stop(
+    "Non-self-contained FLOW HTML must render without Pandoc: ",
+    conditionMessage(pandoc_result),
+    call. = FALSE
+  )
+}
+
+message("PASS: simple FLOW renderers require no legend or Pandoc dependencies")
