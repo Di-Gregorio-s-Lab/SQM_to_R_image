@@ -3,6 +3,20 @@
 
 `%||%` <- function(x, fallback) if (is.null(x)) fallback else x
 
+colors_hex <- c(
+  "#5d8aa8", "#e32636", "#efdecd", "#ffbf00", "#9966cc", "#a4c639",
+  "#cd9575", "#915c83", "#008000", "#fbceb1", "#00ffff", "#4b5320",
+  "#b2beb5", "#87a96b", "#ff9966", "#a52a2a", "#6e7f80", "#ff2052",
+  "#007fff", "#f0ffff", "#89cff0", "#f4c2c2", "#21abcd", "#fae7b5",
+  "#ffe135", "#848482", "#98777b", "#f5f5dc", "#3d2b1f", "#fe6f5e",
+  "#000000", "#ffebcd", "#318ce7", "#ace5ee", "#faf0be", "#0000ff",
+  "#a2a2d0", "#6699cc", "#0d98ba", "#8a2be2", "#de5d83", "#79443b",
+  "#0095b6", "#e3dac9", "#cc0000", "#006a4e", "#873260", "#0070ff",
+  "#b5a642", "#cb4154", "#1dacd6", "#66ff00", "#bf94e4", "#c32148",
+  "#ff007f", "#08e8de", "#d19fe8", "#f4bbff", "#ff55a3", "#fb607f",
+  "#004225", "#cd7f32", "#ffc1cc", "#e7feff", "#f0dc82"
+)
+
 default_workers <- function() {
   cores <- suppressWarnings(parallel::detectCores(logical = FALSE))
   if (is.na(cores) || cores < 1L) return(1L)
@@ -300,6 +314,62 @@ build_pie_table <- function(allocated, official_totals, samples, ko_id, rank, to
 
 selection_dir <- function(selection) if (identical(selection, "defined")) "definiti" else "top20"
 
+build_flow_color_map <- function(taxon_levels, ko_levels = character()) {
+  categories <- unique(c(as.character(taxon_levels), as.character(ko_levels)))
+  categories <- categories[!is.na(categories) & nzchar(categories)]
+  non_other <- setdiff(categories, "Other")
+  base_colors <- unique(colors_hex)
+  category_colors <- if (length(non_other) <= length(base_colors)) {
+    base_colors[seq_along(non_other)]
+  } else {
+    grDevices::hcl.colors(length(non_other), palette = "Dynamic")
+  }
+  stats::setNames(
+    c(category_colors, if ("Other" %in% categories) "grey70" else character()),
+    c(non_other, if ("Other" %in% categories) "Other" else character())
+  )
+}
+
+make_flow_plot <- function(table) {
+  taxon_levels <- unique(as.character(table$taxon))
+  ko_levels <- unique(as.character(table$ko_id))
+  palette <- build_flow_color_map(taxon_levels, ko_levels)
+  plot_table <- transform(
+    table,
+    taxon = factor(taxon, levels = taxon_levels),
+    ko_id = factor(ko_id, levels = ko_levels)
+  )
+  ggplot2::ggplot(plot_table, ggplot2::aes(axis1 = taxon, axis2 = ko_id, y = tpm)) +
+    ggalluvial::geom_alluvium(ggplot2::aes(fill = taxon), width = 0.1) +
+    ggalluvial::geom_stratum(
+      ggplot2::aes(fill = ggplot2::after_stat(stratum)),
+      width = 0.1
+    ) +
+    ggplot2::scale_fill_manual(values = palette, drop = FALSE) +
+    ggplot2::theme_minimal()
+}
+
+make_flow_sankey <- function(table) {
+  taxon_levels <- unique(as.character(table$taxon))
+  ko_levels <- unique(as.character(table$ko_id))
+  palette <- build_flow_color_map(taxon_levels, ko_levels)
+  nodes <- c(paste0("tax:", taxon_levels), paste0("ko:", ko_levels))
+  plotly::plot_ly(
+    type = "sankey",
+    arrangement = "snap",
+    node = list(
+      label = sub("^[^:]+:", "", nodes),
+      color = unname(palette[c(taxon_levels, ko_levels)])
+    ),
+    link = list(
+      source = match(paste0("tax:", table$taxon), nodes) - 1L,
+      target = match(paste0("ko:", table$ko_id), nodes) - 1L,
+      value = table$tpm,
+      color = unname(grDevices::adjustcolor(palette[table$taxon], alpha.f = 0.65))
+    )
+  )
+}
+
 save_plot <- function(plot, path, width, height, dpi) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   ggplot2::ggsave(path, plot = plot, width = width, height = height, dpi = dpi, units = "in")
@@ -340,9 +410,7 @@ render_flow <- function(table, context, pathway_id, pathway_name, width, height,
   directory <- file.path(context$output_dir, "flowplot", selection_dir(context$selection), safe_name(pathway_name), safe_name(rank))
   stem <- paste0("flow_", safe_name(sample))
   data_path <- write_table(table, file.path(directory, paste0(stem, "_data.tsv")))
-  plot <- ggplot2::ggplot(table, ggplot2::aes(axis1 = taxon, axis2 = ko_id, y = tpm)) +
-    ggalluvial::geom_alluvium(ggplot2::aes(fill = taxon), width = 0.1) +
-    ggalluvial::geom_stratum(width = 0.1) + ggplot2::theme_minimal()
+  plot <- make_flow_plot(table)
   plot_path <- save_plot(plot, file.path(directory, paste0(stem, "_", safe_name(dimension_name), ".png")), width, height, dpi)
   rbind(
     artifact_manifest("flow", "data_tsv", data_path, pathway_id, pathway_name, context, rank = rank),
@@ -354,18 +422,7 @@ render_flow_html <- function(table, context, pathway_id, pathway_name) {
   rank <- unique(table$rank)[[1L]]
   sample <- paste(unique(as.character(table$sample)), collapse = "_")
   directory <- file.path(context$output_dir, "flowplot", selection_dir(context$selection), safe_name(pathway_name), safe_name(rank))
-  tax_nodes <- paste0("tax:", unique(table$taxon))
-  ko_nodes <- paste0("ko:", unique(table$ko_id))
-  nodes <- c(tax_nodes, ko_nodes)
-  widget <- plotly::plot_ly(
-    type = "sankey", arrangement = "snap",
-    node = list(label = sub("^[^:]+:", "", nodes)),
-    link = list(
-      source = match(paste0("tax:", table$taxon), nodes) - 1L,
-      target = match(paste0("ko:", table$ko_id), nodes) - 1L,
-      value = table$tpm
-    )
-  )
+  widget <- make_flow_sankey(table)
   path <- file.path(directory, paste0("flow_", safe_name(sample), ".html"))
   dir.create(directory, recursive = TRUE, showWarnings = FALSE)
   htmlwidgets::saveWidget(widget, path, selfcontained = TRUE)
