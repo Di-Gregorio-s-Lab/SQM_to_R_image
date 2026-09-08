@@ -289,17 +289,17 @@ Regole:
 - non cancellare ricorsivamente una directory di output già esistente;
 - assegnare a ogni corsa un `run_id` nel formato
   `YYYYMMDDTHHMMSS_UTCpHHMM_<4hex>` (`UTCmHHMM` per offset negativi);
-- aggiungere `__<run_id>` prima dell'estensione di ogni artefatto senza
-  modificare i nomi delle directory;
+- usare nomi deterministici senza `run_id` per gli artefatti: un target
+  rigenerato viene sovrascritto, mentre gli altri file restano invariati;
 - separare pathway, ranghi e campioni in sottodirectory con nomi sanitizzati;
 - usare TSV per le tabelle di supporto;
 - ogni grafico deve avere una tabella TSV contenente esattamente i dati
   utilizzati per costruirlo;
-- ogni esecuzione deve produrre manifest di sezione e di corsa distinti, mai
-  fusi con manifest storici.
+- creare manifest locali soltanto per FLOW, FUNZ e PIE. Ogni manifest descrive
+  soltanto gli artefatti completati dalla corsa corrente nella propria sezione.
 
 Eccezione di provenienza Pathview: il file
-`pathview_input_all_ko_complete_matrix__<run_id>.tsv` documenta la matrice KO
+`pathview_input_all_ko_complete_matrix.tsv` documenta la matrice KO
 completa passata tramite l'oggetto SQM. È un superset di input e non deve
 essere descritto come tabella dei soli nodi effettivamente disegnati da
 Pathview.
@@ -315,10 +315,12 @@ Aggiungere, quando pertinenti, dimensioni, DPI, rango tassonomico e modalità
 di raggruppamento. Preferire percorsi relativi alla directory di output per
 rendere il manifest trasferibile.
 
-Il manifest di corsa deve inoltre registrare stato, inizio/fine, argomenti CLI,
-ordine dei campioni e sua origine (`cli` o `sqm_column_order`), warning, pathway
-saltati ed eventuale errore. Una corsa fallita conserva gli artefatti parziali,
-scrive `manifest_failed_artifacts__<run_id>.tsv` e termina con codice non zero.
+Pathview e gli output prodotti tramite `plotTaxonomy()` non hanno manifest. Non
+si creano `manifest_all`, manifest di corsa o manifest di fallimento. Ogni
+esecuzione scrive invece `output_dir/<run_id>.log`, con stato, inizio/fine,
+durata, argomenti CLI, versioni, campioni, warning, pathway saltati ed eventuale
+errore. Una corsa fallita conserva gli artefatti parziali e termina con codice
+non zero.
 
 ### 7.2 Colori
 

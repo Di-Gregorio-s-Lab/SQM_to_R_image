@@ -83,7 +83,7 @@ run_case("raw positive-integer parser accepts only canonical decimal digits", {
   }
 })
 
-run_case("invalid integer CLI values fail before SQM loading and write a failed-run manifest", {
+run_case("invalid integer CLI values fail before SQM loading and write a failed run log", {
   test_root <- tempfile("p2_cli_integer_")
   project_dir <- file.path(test_root, "synthetic_project")
   dir.create(project_dir, recursive = TRUE)

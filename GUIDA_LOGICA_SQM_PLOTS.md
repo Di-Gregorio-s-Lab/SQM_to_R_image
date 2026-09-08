@@ -71,8 +71,8 @@ flowchart TD
     N --> Q
     O --> Q
     P --> Q
-    Q --> R[Validazione manifest della corsa]
-    R --> S[manifest_all e manifest_run separati per run_id]
+    Q --> R[Manifest locali FLOW FUNZ PIE]
+    R --> S[Chiusura output_dir/run_id.log]
 ```
 
 ### 1. Preflight prima di caricare le librerie
@@ -440,7 +440,7 @@ contesto, l'ID, i campioni, `count="tpm"` e `log_scale=FALSE`. Le modalità sono
 
 Ogni chiamata usa una directory temporanea isolata e trasferisce soltanto gli
 artefatti appena prodotti. Pathview conserva i colori nativi. Il file
-`pathview_input_all_ko_complete_matrix__<run_id>.tsv` contiene la matrice
+`pathview_input_all_ko_complete_matrix.tsv` contiene la matrice
 completa dei KO forniti e non pretende di identificare i soli nodi disegnati;
 il config registra `log_scale=FALSE`, `pseudocount=NA` e
 `color_source=pathview_native`. Pathview usa il servizio KEGG live: una
@@ -504,9 +504,10 @@ e invariato. Oltre la soglia, lo script accorcia soltanto il filename:
 Il token dipende deterministicamente dal nome logico completo. Se la directory
 è già troppo lunga per contenere prefisso minimo, token, dimensione ed
 estensione, lo script si ferma prima di `ggsave()` e chiede un `output_dir` più
-corto. La compattazione riguarda i PNG generati con `ggsave()`. Tutti i file,
-inclusi quelli prodotti esternamente da Pathview, ricevono `__<run_id>` prima
-dell'estensione; le directory restano invariate.
+corto. La compattazione riguarda i PNG generati con `ggsave()`. I file hanno
+nomi deterministici senza `run_id`: una nuova esecuzione sullo stesso target lo
+sovrascrive. File non selezionati dalla nuova esecuzione e file estranei allo
+script non vengono rimossi.
 
 ## Come funzionano i manifest
 
@@ -516,33 +517,29 @@ rango, metrica, dimensione, DPI, file prodotto e, quando pertinente, audit KO.
 
 Prima di scrivere un manifest di sezione:
 
-1. ogni nuovo `output_file` deve essere relativo a `output_dir`;
+1. ogni nuovo `output_file` deve essere relativo alla directory della sezione;
 2. non può essere vuoto, assoluto o contenere un segmento `..`;
 3. deve risolversi dentro `output_dir`;
 4. deve indicare un file regolare, esistente e non vuoto.
 
-Se una riga nuova non rispetta queste condizioni, la run si ferma. I manifest
-storici non vengono letti, uniti, potati o riscritti: ogni file descrive una
-sola corsa identificata dal proprio `run_id`.
+Se una riga nuova non rispetta queste condizioni, la run si ferma. Un manifest
+riscritto descrive soltanto gli artefatti completati dalla corsa corrente. Se
+una sezione non viene eseguita, il suo manifest precedente resta invariato.
 
 I manifest sono:
 
 ```text
-flowplot/manifest_flow__<run_id>.tsv
-funz/manifest_funz__<run_id>.tsv
-manifest_taxon__<run_id>.tsv
-pathview/manifest_pathview__<run_id>.tsv
-pie/manifest_pie__<run_id>.tsv
-manifest_all__<run_id>.tsv
-manifest_run__<run_id>.tsv
+<context_output_dir>/flowplot/manifest_flow.tsv
+<context_output_dir>/funz/manifest_funz.tsv
+<context_output_dir>/pie/manifest_pie.tsv
 ```
 
-Alla fine, `manifest_all__<run_id>.tsv` indicizza soltanto i manifest di sezione
-prodotti dalla corsa corrente. `manifest_run__<run_id>.tsv` registra stato,
-orari, CLI, campioni, origine dell'ordine, warning e pathway saltati. Se la
-corsa fallisce, gli artefatti parziali restano disponibili e sono elencati in
-`manifest_failed_artifacts__<run_id>.tsv`; il processo termina comunque con
-codice non zero.
+Pathview e gli output ottenuti tramite `plotTaxonomy()` non hanno manifest. Non
+vengono più creati manifest generali, di corsa o di fallimento. Stato, orari,
+CLI, versioni, campioni, warning, pathway saltati ed eventuali errori sono
+registrati in `output_dir/<run_id>.log`. Una corsa fallita conserva gli
+artefatti completati, riscrive i manifest delle sezioni già toccate e termina
+con codice non zero.
 
 ## Errori, warning e salti controllati
 
@@ -591,7 +588,7 @@ umana.
 
 | Funzioni | Responsabilità in linguaggio naturale |
 |---|---|
-| `generate_run_id()`, `allocate_run_id()`, `add_run_id_to_path()` | Creano l'identità univoca della corsa e la inseriscono nei nomi dei file. |
+| `generate_run_id()`, `allocate_run_id()` | Creano l'identità univoca usata dal log e dalle righe dei manifest. |
 | `sanitize_name()`, `pathway_selection_directory()`, `relative_to_output()` | Trasformano etichette in nomi filesystem e mantengono portabili i riferimenti nei manifest. |
 | `progress_message()`, `write_tsv_safe()` | Rendono visibile l'avanzamento e scrivono TSV creando solo le directory necessarie. |
 | `stable_path_token()`, `portable_png_output_path()` | Calcolano un nome PNG corto, leggibile e deterministico quando Windows è vicino al limite. |
@@ -678,8 +675,7 @@ sequenza umana è questa:
     espanso di quel campione;
 11. scrivere il TSV, poi PNG e/o HTML;
 12. registrare soltanto i file esistenti nel manifest FLOW;
-13. indicizzare soltanto i manifest correnti in `manifest_all__<run_id>.tsv` e
-    chiudere `manifest_run__<run_id>.tsv`.
+13. riscrivere il manifest FLOW locale e chiudere `output_dir/<run_id>.log`.
 
 ## Cosa lo script non fa
 

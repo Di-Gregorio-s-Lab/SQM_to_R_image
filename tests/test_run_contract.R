@@ -188,4 +188,4 @@ stopifnot(identical(run_metadata$error_message, "controlled failure"))
 stopifnot(grepl("Empty pathway", run_metadata$skipped_pathways, fixed = TRUE))
 
 script_env$clear_run_context()
-message("PASS: run identity, empty-pathway isolation, and per-run manifests are enforced")
+message("PASS: run identity and empty-pathway isolation are enforced")

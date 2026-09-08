@@ -209,7 +209,7 @@ run_case("help and no-argument CLI work with no optional R libraries", {
   }
 })
 
-run_case("analytical CLI reports missing packages in a failed-run manifest", {
+run_case("analytical CLI reports missing packages in a failed run log", {
   test_root <- tempfile("p3_preflight_run_")
   empty_user_library <- file.path(test_root, "empty-user-library")
   empty_site_library <- file.path(test_root, "empty-site-library")
@@ -287,7 +287,7 @@ run_case("analytical CLI reports missing packages in a failed-run manifest", {
   )
 })
 
-run_case("malformed CLI after output_dir writes a failed-run manifest", {
+run_case("malformed CLI after output_dir writes a failed run log", {
   test_root <- tempfile("p3_parse_failure_")
   output_dir <- file.path(test_root, "failed-run")
   dir.create(test_root, recursive = TRUE)
@@ -347,4 +347,4 @@ if (length(failures) > 0L) {
   )
 }
 
-message("PASS: P3 dependency preflight is mode-aware with failed-run provenance")
+message("PASS: P3 dependency preflight is mode-aware with failure-log provenance")
