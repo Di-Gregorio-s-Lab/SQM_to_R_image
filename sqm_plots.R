@@ -3501,6 +3501,32 @@ build_flow_legend_spec <- function(flow_tbl, tolerance = 1e-6) {
   list(taxonomy = taxonomy, functional = functional)
 }
 
+build_flow_color_map <- function(taxon_levels, ko_levels) {
+  categories <- unique(c(as.character(taxon_levels), as.character(ko_levels)))
+  categories <- categories[!is.na(categories) & nzchar(categories)]
+  non_other <- setdiff(categories, "Other")
+  base_colors <- unique(as.character(colors_hex))
+  base_colors <- base_colors[!is.na(base_colors) & nzchar(base_colors)]
+
+  if (length(non_other) <= length(base_colors)) {
+    category_colors <- base_colors[seq_along(non_other)]
+  } else {
+    category_colors <- grDevices::hcl.colors(length(non_other), palette = "Dynamic")
+    if (anyNA(category_colors) || anyDuplicated(toupper(category_colors))) {
+      stop(
+        "Unable to generate distinct FLOW colors for ",
+        length(non_other), " displayed categories.",
+        call. = FALSE
+      )
+    }
+  }
+
+  stats::setNames(
+    c(category_colors, if ("Other" %in% categories) "grey70" else character()),
+    c(non_other, if ("Other" %in% categories) "Other" else character())
+  )
+}
+
 make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
   taxon_levels <- levels(flow_tbl$taxon)
   ko_levels <- levels(flow_tbl$KO)
@@ -3510,14 +3536,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
       x = factor(.data$x, levels = c("taxon", "KO"), labels = c("Taxon", "KO")),
       stratum = as.character(.data$stratum)
     )
-  tax_palette <- c(
-    stats::setNames(rep(colors_hex, length.out = length(setdiff(taxon_levels, "Other"))), setdiff(taxon_levels, "Other")),
-    if ("Other" %in% taxon_levels) c(Other = "grey70") else NULL
-  )
-  ko_palette <- c(
-    stats::setNames(rep(colors_hex, length.out = length(setdiff(ko_levels, "Other"))), setdiff(ko_levels, "Other")),
-    if ("Other" %in% ko_levels) c(Other = "grey70") else NULL
-  )
+  flow_palette <- build_flow_color_map(taxon_levels, ko_levels)
 
   ggplot(
     flow_tbl,
@@ -3534,7 +3553,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     ) +
     scale_fill_manual(
       name = "Taxonomy | % of sample",
-      values = tax_palette,
+      values = flow_palette,
       breaks = legend_spec$taxonomy$node,
       labels = legend_spec$taxonomy$label,
       drop = FALSE
@@ -3543,7 +3562,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     ggnewscale::new_scale_fill() +
     ggalluvial::geom_stratum(
       data = dplyr::filter(lodes_tbl, .data$x == "KO"),
-      aes(x = .data$x, stratum = .data$stratum, alluvium = .data$alluvium, y = .data$flow_percent, fill = .data$stratum),
+      aes(x = .data$x, stratum = .data$stratum, alluvium = .data$alluvium, y = .data$flow_percent, fill = after_stat(stratum)),
       inherit.aes = FALSE,
       width = 1 / 5,
       color = "grey35",
@@ -3551,7 +3570,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     ) +
     scale_fill_manual(
       name = "Function (KO / EC) | % of sample",
-      values = ko_palette,
+      values = flow_palette,
       breaks = legend_spec$functional$node,
       labels = legend_spec$functional$label,
       drop = FALSE
@@ -3605,14 +3624,7 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
     legend_spec$functional$display_name,
     legend_spec$functional$node
   )
-  tax_palette <- c(
-    stats::setNames(rep(colors_hex, length.out = length(setdiff(tax_labels, "Other"))), setdiff(tax_labels, "Other")),
-    if ("Other" %in% tax_labels) c(Other = "grey70") else NULL
-  )
-  ko_palette <- c(
-    stats::setNames(rep(colors_hex, length.out = length(setdiff(ko_labels, "Other"))), setdiff(ko_labels, "Other")),
-    if ("Other" %in% ko_labels) c(Other = "grey70") else NULL
-  )
+  flow_palette <- build_flow_color_map(tax_labels, ko_labels)
   tax_y <- if (length(tax_labels) == 1L) 0.5 else seq(0.98, 0.02, length.out = length(tax_labels))
   ko_y <- if (length(ko_labels) == 1L) 0.5 else seq(0.98, 0.02, length.out = length(ko_labels))
 
@@ -3629,7 +3641,7 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
         unname(tax_node_labels[tax_labels]),
         unname(functional_node_labels[ko_labels])
       ),
-      color = c(unname(tax_palette[tax_labels]), unname(ko_palette[ko_labels])),
+      color = unname(flow_palette[c(tax_labels, ko_labels)]),
       x = c(rep(0.02, length(tax_labels)), rep(0.98, length(ko_labels))),
       y = c(tax_y, ko_y)
     ),
@@ -3637,7 +3649,7 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
       source = match(as.character(flow_tbl$taxon), tax_labels) - 1L,
       target = length(tax_labels) + match(as.character(flow_tbl$KO), ko_labels) - 1L,
       value = flow_tbl$flow_percent,
-      color = unname(grDevices::adjustcolor(tax_palette[as.character(flow_tbl$taxon)], alpha.f = 0.65)),
+      color = unname(grDevices::adjustcolor(flow_palette[as.character(flow_tbl$taxon)], alpha.f = 0.65)),
       customdata = paste0(
         "Taxon: ", flow_tbl$taxon,
         "<br>Taxon share: ",

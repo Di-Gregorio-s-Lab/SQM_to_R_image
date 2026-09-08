@@ -138,6 +138,23 @@ if (!identical(observed_taxon_colors, expected_taxon_colors) ||
   )
 }
 
+ko_stratum_colors <- extract_layer_colors(built_plot$data[[3L]])
+expected_ko_strata <- data.frame(
+  category = ko_categories,
+  color = expected_ko_colors,
+  stringsAsFactors = FALSE
+)
+observed_ko_strata <- merge(
+  ko_stratum_colors,
+  expected_ko_strata,
+  by = "category",
+  suffixes = c("_stratum", "_expected")
+)
+if (nrow(observed_ko_strata) != length(ko_categories) ||
+    !all(observed_ko_strata$color_stratum == observed_ko_strata$color_expected)) {
+  stop("FLOW KO strata do not reuse their legend colors.", call. = FALSE)
+}
+
 non_other_colors <- c(
   observed_taxon_colors[taxon_categories != "Other"],
   observed_ko_colors[ko_categories != "Other"]
