@@ -42,7 +42,14 @@ if (length(trace$node$x) > 0L || length(trace$node$y) > 0L) {
 }
 
 observed_labels <- as.character(unlist(trace$node$label, use.names = FALSE))
-expected_labels <- c("Tax_Z", "Tax_A", "Tax_M", "Other KOs", "K00002", "K00001")
+expected_labels <- c(
+  "Tax_Z | 50.0%",
+  "Tax_A | 20.0%",
+  "Tax_M | 30.0%",
+  "Other KOs | 25.0%",
+  "K00002 / EC 2.2.2.2 | 55.0%",
+  "K00001 / EC 1.1.1.1 | 20.0%"
+)
 if (!identical(observed_labels, expected_labels)) {
   stop(
     "Simple FLOW HTML node labels changed; expected ",
@@ -105,4 +112,4 @@ if ("rmarkdown" %in% html_requirements) {
 if ("ggnewscale" %in% png_requirements) {
   stop("Simple FLOW PNG without legends must not require ggnewscale.", call. = FALSE)
 }
-message("PASS: simple FLOW renderers require no legend-only dependencies")
+message("PASS: FLOW legends require no extra rendering dependencies")

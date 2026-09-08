@@ -257,7 +257,7 @@ legend_orfs <- tibble::tibble(
   phylum = c("Alpha", "Alpha", "Beta", "Beta")
 )
 
-run_case("FLOW PNG uses the simple legend-free renderer", {
+run_case("FLOW PNG renders taxonomy and function legends", {
   rank_tbl <- script_env$build_flow_table_for_rank(
     legend_orfs,
     "phylum",
@@ -280,8 +280,8 @@ run_case("FLOW PNG uses the simple legend-free renderer", {
   )
   expect_identical(
     plot_object$theme$legend.position,
-    "none",
-    "FLOW PNG unexpectedly rendered a legend"
+    "right",
+    "FLOW PNG did not render its legends"
   )
 
   png_path <- tempfile("flow_two_legends_", fileext = ".png")
@@ -300,7 +300,7 @@ run_case("FLOW PNG uses the simple legend-free renderer", {
   )
 })
 
-run_case("FLOW Sankey uses plain nodes and detailed hover", {
+run_case("FLOW Sankey uses detailed nodes and hover", {
   rank_tbl <- script_env$build_flow_table_for_rank(
     legend_orfs,
     "phylum",
@@ -326,8 +326,12 @@ run_case("FLOW Sankey uses plain nodes and detailed hover", {
   hover_text <- as.character(unlist(trace$link$customdata, use.names = FALSE))
 
   expect_true(
-    all(c("Alpha", "K00001", "Other KOs") %in% node_labels),
-    "FLOW Sankey plain node labels are incomplete"
+    all(c(
+      "Alpha | 60.0%",
+      "K00001 / EC 1.1.1.1;2.2.2.2 | 60.0%",
+      "Other KOs | 10.0%"
+    ) %in% node_labels),
+    "FLOW Sankey detailed node labels are incomplete"
   )
   expect_true(
     any(grepl("Taxon share: 60.0%", hover_text, fixed = TRUE)) &&

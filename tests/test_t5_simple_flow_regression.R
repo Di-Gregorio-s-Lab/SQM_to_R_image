@@ -80,8 +80,8 @@ if (nrow(comparison) != length(levels(flow_fixture$taxon)) ||
   )
 }
 
-if (!identical(plot_object$theme$legend.position, "none")) {
-  stop("Simple FLOW PNG must not render a legend.", call. = FALSE)
+if (!identical(plot_object$theme$legend.position, "right")) {
+  stop("FLOW PNG must render its two legends on the right.", call. = FALSE)
 }
 
 message("PASS: simple FLOW ribbons align with their taxonomy strata")

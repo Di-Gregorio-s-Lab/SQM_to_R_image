@@ -3405,8 +3405,8 @@ build_flow_table_for_sample <- function(flow_rank_table, pathway_name, rank, sam
   flow_tbl
 }
 
-build_flow_taxon_colors <- function(taxon_levels) {
-  categories <- unique(as.character(taxon_levels))
+build_flow_color_map <- function(taxon_levels, ko_levels = character()) {
+  categories <- unique(c(as.character(taxon_levels), as.character(ko_levels)))
   categories <- categories[!is.na(categories) & nzchar(categories)]
   non_other <- setdiff(categories, "Other")
   base_colors <- unique(as.character(colors_hex))
@@ -3431,25 +3431,50 @@ build_flow_taxon_colors <- function(taxon_levels) {
   )
 }
 
+build_flow_legend_labels <- function(flow_tbl, taxon_levels, ko_levels) {
+  taxon_percent <- flow_tbl$taxon_percent[
+    match(taxon_levels, as.character(flow_tbl$taxon))
+  ]
+  ko_rows <- match(ko_levels, as.character(flow_tbl$KO))
+  ec_codes <- trimws(as.character(flow_tbl$ec_codes[ko_rows]))
+  ec_codes[is.na(ec_codes) | !nzchar(ec_codes)] <- "NA"
+  ko_names <- ifelse(
+    ko_levels == "Other",
+    "Other KOs",
+    paste0(ko_levels, " / EC ", ec_codes)
+  )
+
+  list(
+    taxonomy = stats::setNames(
+      paste0(taxon_levels, " | ", format_ko_sample_percent(taxon_percent)),
+      taxon_levels
+    ),
+    functional = stats::setNames(
+      paste0(
+        ko_names,
+        " | ",
+        format_ko_sample_percent(flow_tbl$KO_percent[ko_rows])
+      ),
+      ko_levels
+    )
+  )
+}
+
 make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
   taxon_levels <- levels(flow_tbl$taxon)
   ko_levels <- levels(flow_tbl$KO)
-  ko_display_levels <- ifelse(ko_levels == "Other", "Other KOs", ko_levels)
   plot_tbl <- flow_tbl |>
     mutate(
       taxon = factor(as.character(.data$taxon), levels = taxon_levels),
-      KO_display = if_else(
-        as.character(.data$KO) == "Other",
-        "Other KOs",
-        as.character(.data$KO)
-      ),
-      KO_display = factor(.data$KO_display, levels = ko_display_levels)
+      KO = factor(as.character(.data$KO), levels = ko_levels)
     )
-  taxon_palette <- build_flow_taxon_colors(taxon_levels)
+  flow_palette <- build_flow_color_map(taxon_levels, ko_levels)
+  legend_labels <- build_flow_legend_labels(flow_tbl, taxon_levels, ko_levels)
+  ko_legend <- data.frame(KO = factor(ko_levels, levels = ko_levels))
 
   ggplot(
     plot_tbl,
-    aes(axis1 = .data$taxon, axis2 = .data$KO_display, y = .data$flow_percent)
+    aes(axis1 = .data$taxon, axis2 = .data$KO, y = .data$flow_percent)
   ) +
     ggalluvial::geom_alluvium(
       aes(fill = .data$taxon),
@@ -3458,7 +3483,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     ) +
     ggalluvial::geom_stratum(
       width = 1 / 5,
-      fill = "grey95",
+      aes(fill = after_stat(stratum)),
       color = "grey35",
       linewidth = 0.25
     ) +
@@ -3467,7 +3492,34 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
       aes(label = after_stat(stratum)),
       size = 2.8
     ) +
-    scale_fill_manual(values = taxon_palette, drop = FALSE, guide = "none") +
+    scale_fill_manual(
+      name = "Taxonomy",
+      values = flow_palette,
+      breaks = taxon_levels,
+      labels = unname(legend_labels$taxonomy[taxon_levels]),
+      drop = FALSE
+    ) +
+    geom_point(
+      data = ko_legend,
+      aes(x = 1, y = 0, colour = .data$KO),
+      inherit.aes = FALSE,
+      alpha = 0,
+      show.legend = TRUE
+    ) +
+    scale_colour_manual(
+      name = "Function (KO / EC)",
+      values = flow_palette,
+      breaks = ko_levels,
+      labels = unname(legend_labels$functional[ko_levels]),
+      drop = FALSE
+    ) +
+    guides(
+      fill = guide_legend(order = 1),
+      colour = guide_legend(
+        order = 2,
+        override.aes = list(alpha = 1, shape = 15, size = 4)
+      )
+    ) +
     scale_x_discrete(limits = c("Taxon", "KO"), expand = c(0.08, 0.08)) +
     labs(
       title = paste0("Flowplot - ", pathway_name, " - ", rank, " - ", sample_name),
@@ -3477,7 +3529,10 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     ) +
     theme_minimal(base_size = 12) +
     theme(
-      legend.position = "none",
+      legend.position = "right",
+      legend.title = element_text(face = "bold"),
+      legend.text = element_text(size = 8),
+      legend.key.size = grid::unit(0.55, "lines"),
       axis.text.y = element_blank(),
       panel.grid = element_blank(),
       plot.title = element_text(face = "bold")
@@ -3487,8 +3542,8 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
 make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
   tax_labels <- levels(flow_tbl$taxon)
   ko_labels <- levels(flow_tbl$KO)
-  ko_display_labels <- ifelse(ko_labels == "Other", "Other KOs", ko_labels)
-  taxon_palette <- build_flow_taxon_colors(tax_labels)
+  flow_palette <- build_flow_color_map(tax_labels, ko_labels)
+  legend_labels <- build_flow_legend_labels(flow_tbl, tax_labels, ko_labels)
   taxon_percents <- stats::setNames(
     flow_tbl$taxon_percent[match(tax_labels, as.character(flow_tbl$taxon))],
     tax_labels
@@ -3507,15 +3562,18 @@ make_flow_sankey <- function(flow_tbl, pathway_name, rank, sample_name) {
       pad = 18,
       thickness = 18,
       line = list(color = "rgba(70,70,70,0.35)", width = 0.5),
-      label = c(tax_labels, ko_display_labels),
-      color = rep("rgba(245,245,245,1)", length(tax_labels) + length(ko_labels))
+      label = c(
+        unname(legend_labels$taxonomy[tax_labels]),
+        unname(legend_labels$functional[ko_labels])
+      ),
+      color = unname(flow_palette[c(tax_labels, ko_labels)])
     ),
     link = list(
       source = match(as.character(flow_tbl$taxon), tax_labels) - 1L,
       target = length(tax_labels) + match(as.character(flow_tbl$KO), ko_labels) - 1L,
       value = flow_tbl$flow_percent,
       color = unname(grDevices::adjustcolor(
-        taxon_palette[as.character(flow_tbl$taxon)],
+        flow_palette[as.character(flow_tbl$taxon)],
         alpha.f = 0.65
       )),
       customdata = paste0(

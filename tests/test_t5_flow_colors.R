@@ -131,11 +131,18 @@ sankey <- script_env$make_flow_sankey(
   "phylum",
   "S_flow"
 )
-trace <- sankey$x$data[[1L]]
+trace <- plotly::plotly_build(sankey)$x$data[[1L]]
 expected_node_colors <- toupper(unname(flow_palette[c(taxon_levels, ko_levels)]))
 observed_node_colors <- toupper(as.character(unlist(trace$node$color, use.names = FALSE)))
 if (!identical(observed_node_colors, expected_node_colors)) {
-  stop("FLOW HTML nodes do not share the PNG category colors.", call. = FALSE)
+  stop(
+    "FLOW HTML nodes do not share the PNG category colors; expected ",
+    paste(expected_node_colors, collapse = ", "),
+    "; observed ",
+    paste(observed_node_colors, collapse = ", "),
+    ".",
+    call. = FALSE
+  )
 }
 expected_node_labels <- c(expected_taxon_labels, expected_ko_labels)
 observed_node_labels <- as.character(unlist(trace$node$label, use.names = FALSE))

@@ -116,11 +116,22 @@ for (sample_name in selected_samples) {
   if (anyNA(geometry$delta) || any(geometry$delta > 1e-8)) {
     stop("CS8 FLOW ribbons and taxonomy strata are displaced for ", sample_name, ".", call. = FALSE)
   }
-  if (!identical(plot_object$theme$legend.position, "none")) {
-    stop("CS8 simple FLOW PNG rendered a legend for ", sample_name, ".", call. = FALSE)
+  if (!identical(plot_object$theme$legend.position, "right")) {
+    stop("CS8 FLOW PNG did not render its legends for ", sample_name, ".", call. = FALSE)
   }
-  if (!identical(unique(toupper(as.character(built_plot$data[[2L]]$fill))), "GREY95")) {
-    stop("CS8 simple FLOW columns are not neutral for ", sample_name, ".", call. = FALSE)
+  flow_palette <- script_env$build_flow_color_map(
+    levels(flow_tbl$taxon),
+    levels(flow_tbl$KO)
+  )
+  strata <- built_plot$data[[2L]]
+  expected_strata_colors <- toupper(unname(
+    flow_palette[as.character(strata$stratum)]
+  ))
+  if (anyNA(expected_strata_colors) || !identical(
+    toupper(as.character(strata$fill)),
+    expected_strata_colors
+  )) {
+    stop("CS8 FLOW columns do not use shared colors for ", sample_name, ".", call. = FALSE)
   }
 
   sankey <- script_env$make_flow_sankey(
@@ -133,6 +144,16 @@ for (sample_name in selected_samples) {
   if (!identical(as.character(trace$arrangement), "snap") ||
       length(trace$node$x) > 0L || length(trace$node$y) > 0L) {
     stop("CS8 FLOW HTML still forces node positions for ", sample_name, ".", call. = FALSE)
+  }
+  expected_node_colors <- toupper(unname(flow_palette[c(
+    levels(flow_tbl$taxon),
+    levels(flow_tbl$KO)
+  )]))
+  if (!identical(
+    toupper(as.character(unlist(trace$node$color, use.names = FALSE))),
+    expected_node_colors
+  )) {
+    stop("CS8 FLOW HTML and PNG colors differ for ", sample_name, ".", call. = FALSE)
   }
 
   png_path <- file.path(render_dir, paste0(sample_name, ".png"))
