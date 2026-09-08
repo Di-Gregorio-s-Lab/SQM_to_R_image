@@ -53,3 +53,46 @@ if (!identical(observed_labels, expected_labels)) {
 }
 
 message("PASS: simple FLOW HTML uses automatic layout and plain labels")
+
+output_root <- tempfile("t5_flow_html_")
+dir.create(output_root, recursive = TRUE)
+on.exit(unlink(output_root, recursive = TRUE, force = TRUE), add = TRUE)
+html_path <- file.path(output_root, "flowplot.html")
+dependency_dir <- file.path(output_root, "flowplot_files")
+
+script_env$save_html_widget(widget, html_path)
+if (!file.exists(html_path) || file.info(html_path)$size <= 0L) {
+  stop("FLOW HTML writer did not create a non-empty HTML file.", call. = FALSE)
+}
+dependency_files <- list.files(
+  dependency_dir,
+  recursive = TRUE,
+  full.names = TRUE,
+  all.files = TRUE,
+  no.. = TRUE
+)
+if (!dir.exists(dependency_dir) || length(dependency_files) == 0L) {
+  stop(
+    "FLOW HTML must create its support directory: ",
+    dependency_dir,
+    call. = FALSE
+  )
+}
+html_text <- paste(readLines(html_path, warn = FALSE), collapse = "\n")
+if (!grepl("flowplot_files", html_text, fixed = TRUE)) {
+  stop("FLOW HTML does not reference its support directory.", call. = FALSE)
+}
+
+first_dependency_count <- length(dependency_files)
+script_env$save_html_widget(widget, html_path)
+second_dependency_count <- length(list.files(
+  dependency_dir,
+  recursive = TRUE,
+  all.files = TRUE,
+  no.. = TRUE
+))
+if (second_dependency_count != first_dependency_count) {
+  stop("FLOW HTML support directory is not stable across overwrite.", call. = FALSE)
+}
+
+message("PASS: FLOW HTML creates and overwrites its support directory")
