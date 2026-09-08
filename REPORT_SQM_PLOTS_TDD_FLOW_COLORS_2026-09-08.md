@@ -1,78 +1,70 @@
-# Report TDD — mapping colori FLOW
+# Report TDD — ripristino FLOW semplice
 
 Data: 2026-09-08  
 Branch: `fix/p3-correctness`
 
-## Obiettivo
+## Esito
 
-Correggere la colonna tassonomica bianca nei FLOW PNG e usare un solo mapping nominato `categoria -> colore` in ogni grafico. Flussi, colonne, due legende PNG, nodi e link HTML devono condividere tale assegnazione senza modificare i dati scientifici.
+La soluzione a palette unificata della Tranche 5 è stata sostituita perché alterava la geometria percepita del FLOW reale CS8 e rendeva l'HTML difficile da leggere.
+
+Il renderer produttivo ora usa una rappresentazione semplice e stabile:
+
+- ribbon colorati soltanto in base al taxon di origine;
+- colonne tassonomica e KO neutre (`grey95`);
+- nessuna legenda nel PNG;
+- geometria di ribbon e colonne calcolata dallo stesso `flow_tbl` wide;
+- Sankey HTML con layout Plotly automatico `snap`, nodi neutri e link colorati per taxon;
+- etichette semplici, con TPM, KO, EC e percentuali disponibili nell'hover;
+- HTML non self-contained con directory di supporto `<nome>_files`.
+
+I dati scientifici, i TSV, il valore di K01563, i manifest e i log non sono stati modificati.
+
+## Causa della regressione
+
+I ribbon erano calcolati direttamente dal `flow_tbl` wide, mentre le colonne venivano ricostruite separatamente con `ggalluvial::to_lodes_form()`. La conversione di `stratum` a carattere perdeva l'ordine dei factor e disponeva i rettangoli in un ordine diverso da quello usato per i ribbon.
+
+Nel PNG reale `flowplot_family_CS8T2_16x9.png` lo scarto verticale massimo fra ribbon e strato tassonomico era `42.06794`. Con il renderer semplice lo scarto è `2.84e-14`, cioè solo rumore numerico.
+
+L'HTML precedente forzava inoltre le coordinate dei nodi. Il ripristino di `arrangement = "snap"` lascia a Plotly il posizionamento coerente del Sankey. La directory `_files` mancava perché il widget era stato reso self-contained; `save_html_widget()` è tornata a usare `selfcontained = FALSE`.
 
 ## Checkpoint TDD
 
-1. Baseline GREEN: 29 test rapidi.
-2. RED colonna tassonomica: `da1ab8d` — `test: reproduce blank FLOW taxonomy strata`.
-3. GREEN colonna tassonomica: `5473431` — `fix: color FLOW taxonomy strata`.
-4. RED mapping condiviso: `b39b3b7` — `test: define shared FLOW category colors`.
-5. GREEN mapping condiviso: `ba8ed07` — `fix: unify FLOW category color mapping`.
-6. Integrazione CS8: `2561ee9` — `test: verify CS8 FLOW color parity`.
+1. `21686a1` — RED: `test: reproduce displaced FLOW strata`
+2. `c930802` — GREEN: `fix: restore simple aligned FLOW PNG`
+3. `9b78709` — RED: `test: reproduce forced FLOW HTML layout`
+4. `fcf6b66` — GREEN: `fix: restore automatic FLOW HTML layout`
+5. `b8aee25` — RED: `test: require FLOW HTML support directory`
+6. `e0d878d` — GREEN: `fix: restore FLOW HTML support directory`
+7. `db4a565` — RED: `test: define simple FLOW runtime dependencies`
+8. `bc79745` — GREEN: `fix: simplify FLOW renderer dependencies`
+9. `2073bbd` — integrazione: `test: verify simple CS8 FLOW rendering`
 
 I commit sono locali e non è stato eseguito alcun push.
 
-## Evidenza RED
-
-Il primo test costruiva il grafico con `ggplot2::ggplot_build()` e osservava:
-
-```text
-Alpha: flow=#E32636, stratum=WHITE, legend=#E32636
-Beta:  flow=#5D8AA8, stratum=WHITE, legend=#5D8AA8
-Other: flow=GREY70, stratum=WHITE, legend=GREY70
-```
-
-La conversione di `stratum` a testo, da sola, non era sufficiente: `StatStratum` ricalcolava la variabile dopo il mapping. La correzione usa quindi `after_stat(stratum)` per il riempimento delle colonne.
-
-Il secondo RED mostrava due palette indipendenti:
-
-```text
-taxonomy=#5D8AA8,#E32636,GREY70
-function=#5D8AA8,#E32636,GREY70
-expected function=#EFDECD,#FFBF00,GREY70
-```
-
-Tassoni e KO distinti ripartivano dagli stessi primi colori.
-
-## Implementazione GREEN
-
-- `build_flow_color_map()` costruisce un unico vettore nominato usando prima i livelli tassonomici e poi quelli KO.
-- Categorie mancanti, vuote e duplicate vengono eliminate; `Other` compare una sola volta ed è sempre `grey70`.
-- La palette usa `unique(colors_hex)`. Se le categorie superano i colori disponibili, viene generata una palette HCL deterministica; colori mancanti o duplicati causano un errore esplicito.
-- Le due scale PNG restano separate per titoli, break e label, ma ricevono lo stesso mapping completo.
-- Gli alluvia mantengono il colore del taxon sorgente; entrambe le colonne usano lo strato calcolato da `StatStratum`.
-- Il Sankey usa lo stesso mapping per i nodi e deriva i link dal colore del taxon sorgente applicando soltanto la trasparenza.
-- Nessuna modifica è stata apportata a CLI, TSV, motore KEGG, manifest, log o nomi degli output.
-
-## Verifiche
+## Garanzie verificate
 
 | Garanzia | Evidenza | Risultato |
 |---|---|---|
-| Flusso, colonna tassonomica e legenda coincidono | `tests/test_t5_flow_colors.R` | PASS |
-| Tassoni e KO distinti non riutilizzano colori | `tests/test_t5_flow_colors.R` | PASS |
-| `Other` rimane `grey70` nelle due sezioni | `tests/test_t5_flow_colors.R` | PASS |
-| Il mapping non dipende dall'ordine delle righe | `tests/test_t5_flow_colors.R` | PASS |
-| PNG e HTML condividono i colori | `tests/test_t5_flow_colors.R` | PASS |
-| L'overflow usa colori HCL non riciclati | `tests/test_t5_flow_colors.R` | PASS |
-| I cinque campioni CS8 renderizzano PNG e HTML non vuoti | `tests/test_t5_integration_CS8.R` | PASS |
-| Il TPM K01563 CS8 resta invariato entro `1e-8` | `tests/test_t5_integration_CS8.R` | PASS |
+| Ribbon e colonna tassonomica condividono gli stessi intervalli verticali | `tests/test_t5_simple_flow_regression.R` | PASS |
+| Il PNG usa colori tassonomici soltanto sui ribbon, colonne neutre e nessuna legenda | `tests/test_t5_flow_colors.R` | PASS |
+| L'HTML usa il layout automatico e non forza coordinate `x/y` | `tests/test_t5_simple_html_regression.R` | PASS |
+| L'HTML crea e può sovrascrivere la directory `<nome>_files` | `tests/test_t5_simple_html_regression.R` | PASS |
+| FLOW non richiede più `ggnewscale`, `rmarkdown` o Pandoc | test preflight e dipendenze | PASS |
+| I cinque campioni CS8 mantengono K01563 entro `1e-8` | `tests/test_t5_integration_CS8.R` | PASS |
+| PNG, HTML e directory di supporto vengono realmente prodotti | `tests/test_t5_integration_CS8.R` | PASS |
+| Il rendering non modifica `flow_tbl` | test sintetici e integrazione CS8 | PASS |
 | Oracle SQMtools/pathview/plotTaxonomy | `tests/test_t1_sqmtools_oracles.R` | PASS |
-| Parità scientifica Tranche 3 fixture | `tests/test_t3_integration_CS8.R --oracle=fixture` | PASS |
-| Lifecycle output Tranche 4 | `tests/test_t4_integration_CS8.R` | PASS |
+| Parità scientifica della Tranche 3 | `tests/test_t3_integration_CS8.R --oracle=fixture` | PASS |
+| Lifecycle degli output della Tranche 4 | `tests/test_t4_integration_CS8.R` | PASS |
 
-Comandi eseguiti:
+## Verifica finale
 
 ```powershell
 rtk Rscript tests/run_fast_tests.R
 rtk Rscript tests/test_t1_sqmtools_oracles.R
 
 $env:SQM_CS8_PROJECT_DIR = "C:\Users\unico\OneDrive - University of Pisa\Documenti\UNIPI\Grani\Progetti\TCE\Shotgun\minion\montescudaio\CS8_All\CS8_All"
+
 rtk Rscript tests/test_t3_integration_CS8.R --oracle=fixture
 rtk Rscript tests/test_t4_integration_CS8.R
 rtk Rscript tests/test_t5_integration_CS8.R
@@ -80,8 +72,8 @@ rtk Rscript tests/test_t5_integration_CS8.R
 
 Risultato finale:
 
-- 30 test rapidi GREEN;
+- 32 test rapidi GREEN;
 - oracle SQMtools 1.7.2 GREEN;
-- integrazioni CS8 scientifica, lifecycle e colori GREEN;
+- integrazioni CS8 scientifica, lifecycle e rendering FLOW GREEN;
 - nessuna variazione dei valori ufficiali K01563;
 - nessun artefatto KEGG aggiunto al repository.
