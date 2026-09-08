@@ -3506,7 +3506,10 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
   ko_levels <- levels(flow_tbl$KO)
   legend_spec <- build_flow_legend_spec(flow_tbl)
   lodes_tbl <- ggalluvial::to_lodes_form(flow_tbl, axes = c("taxon", "KO"), discern = FALSE) |>
-    mutate(x = factor(.data$x, levels = c("taxon", "KO"), labels = c("Taxon", "KO")))
+    mutate(
+      x = factor(.data$x, levels = c("taxon", "KO"), labels = c("Taxon", "KO")),
+      stratum = as.character(.data$stratum)
+    )
   tax_palette <- c(
     stats::setNames(rep(colors_hex, length.out = length(setdiff(taxon_levels, "Other"))), setdiff(taxon_levels, "Other")),
     if ("Other" %in% taxon_levels) c(Other = "grey70") else NULL
@@ -3523,7 +3526,7 @@ make_flow_plot <- function(flow_tbl, pathway_name, rank, sample_name) {
     ggalluvial::geom_alluvium(aes(fill = .data$taxon), alpha = 0.78, width = 1 / 12) +
     ggalluvial::geom_stratum(
       data = dplyr::filter(lodes_tbl, .data$x == "Taxon"),
-      aes(x = .data$x, stratum = .data$stratum, alluvium = .data$alluvium, y = .data$flow_percent, fill = .data$stratum),
+      aes(x = .data$x, stratum = .data$stratum, alluvium = .data$alluvium, y = .data$flow_percent, fill = after_stat(stratum)),
       inherit.aes = FALSE,
       width = 1 / 5,
       color = "grey35",
