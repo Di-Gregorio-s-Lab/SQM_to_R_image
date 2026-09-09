@@ -8,6 +8,7 @@ run_pipeline <- get("run_pipeline", envir = script_env, inherits = FALSE)
 
 orf_ids <- paste0("orf", 1:4)
 sqm <- list(
+  source = "context",
   orfs = list(
     table = data.frame(
       "KEGG ID" = c("K00001", "K00001;K00002", "K00002", NA),
@@ -65,15 +66,26 @@ stopifnot(identical(
   "00720"
 ))
 pathway_kos <- list(`00001` = "K00001", `00002` = "K00002")
-kgml_loader <- function(pathway_id) pathway_kos[[as.character(pathway_id)]]
+kgml_loader <- function(...) stop("KGML must not select pathway data")
+subset_calls <- character()
+fake_subset_fun <- function(SQM, fun, ...) {
+  subset_calls <<- c(subset_calls, fun)
+  subset <- SQM
+  subset$source <- paste0("subset:", fun)
+  subset
+}
+taxonomy_sources <- character()
+pathview_sources <- character()
 
 fake_plot_taxonomy <- function(SQM, rank, samples, rescale, ...) {
+  taxonomy_sources <<- c(taxonomy_sources, SQM$source)
   stopifnot(identical(rank, "phylum"), identical(samples, "S1"), identical(rescale, FALSE))
   data <- data.frame(phylum = c("Alpha", "Beta"), TPM = c(80, 40))
   ggplot2::ggplot(data, ggplot2::aes(phylum, TPM)) + ggplot2::geom_col()
 }
 
 fake_export_pathway <- function(SQM, pathway_id, samples, output_dir, ...) {
+  pathview_sources <<- c(pathview_sources, SQM$source)
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   path <- file.path(output_dir, paste0("ko", pathway_id, ".png"))
   grDevices::png(path, width = 320, height = 320)
@@ -106,7 +118,8 @@ invoke <- function(config) run_pipeline(
   catalog = catalog,
   kgml_loader = kgml_loader,
   plot_taxonomy_fn = fake_plot_taxonomy,
-  export_pathway_fn = fake_export_pathway
+  export_pathway_fn = fake_export_pathway,
+  subset_fun = fake_subset_fun
 )
 
 top20_columns <- c(
@@ -168,7 +181,13 @@ if (length(missing_roots)) stop(
   "Missing graphic roots: ", paste(missing_roots, collapse = ", "),
   "; errors: ", paste(paste(pipeline_result$errors$task_id, pipeline_result$errors$error, sep = "="), collapse = " | "), call. = FALSE
 )
-stopifnot(length(list.files(file.path(output_dir, "pathview"), pattern = "\\.tsv$", recursive = TRUE)) > 0L)
+stopifnot(
+  setequal(unique(subset_calls), c("First pathway", "Second pathway")),
+  all(grepl("^subset:", taxonomy_sources[grepl("^subset:", taxonomy_sources)])),
+  all(pathview_sources == "context"),
+  length(list.files(file.path(output_dir, "pathview"), pattern = "\\.tsv$", recursive = TRUE)) == 0L,
+  length(list.files(file.path(output_dir, "taxonomy_by_pathway"), pattern = "\\.tsv$", recursive = TRUE)) == 0L
+)
 stopifnot(length(list.files(file.path(output_dir, "funz"), pattern = "enzim", recursive = TRUE, ignore.case = TRUE)) > 0L)
 stopifnot(length(list.files(file.path(output_dir, "funz", "enzimi", "separato"), pattern = "\\.png$", recursive = TRUE)) > 0L)
 
