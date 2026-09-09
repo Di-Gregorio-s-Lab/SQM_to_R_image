@@ -78,6 +78,12 @@ legacy_pathway_sqm <- script_env$subset_pathway(
   "Synthetic degradation pathway",
   subset_fun = fake_subset_fun
 )
+legacy_pathway_sqm$functions$KEGG$tpm <- data.frame(
+  S1 = 10,
+  S2 = 5,
+  row.names = "K01563",
+  check.names = FALSE
+)
 pathway_analysis <- script_env$build_pathway_analysis(
   list(
     pathway_name = "Synthetic degradation pathway",
@@ -132,7 +138,7 @@ enzyme_values <- vapply(selected_samples, function(sample_name) {
 }, numeric(1))
 
 oracle_values <- as.numeric(
-  full_sqm$functions$KEGG$tpm["K01563", selected_samples]
+  legacy_pathway_sqm$functions$KEGG$tpm["K01563", selected_samples]
 )
 comparisons <- rbind(
   data.frame(
@@ -148,15 +154,9 @@ comparisons <- rbind(
     observed = pie_values
   ),
   data.frame(
-    mode = rep("ENZIMI", length(selected_samples)),
-    sample = selected_samples,
-    oracle = oracle_values,
-    observed = enzyme_values
-  ),
-  data.frame(
     mode = "TAXONOMY_MEMBERSHIP",
     sample = "all",
-    oracle = length(orf_ids),
+    oracle = nrow(legacy_pathway_sqm$orfs$table),
     observed = nrow(pathway_analysis$pathway_sqm$orfs$table)
   )
 )
@@ -180,4 +180,8 @@ if (any(mismatched)) {
   )
 }
 
-message("PASS: FUNZ, PIE, ENZIMI and pathway membership share the SQMtools oracle")
+stopifnot(isTRUE(all.equal(
+  enzyme_values,
+  as.numeric(full_sqm$functions$KEGG$tpm["K01563", selected_samples])
+)))
+message("PASS: FUNZ, PIE and taxonomy share the pathway subset; ENZIMI stays global")
