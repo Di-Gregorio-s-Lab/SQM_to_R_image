@@ -63,13 +63,17 @@ fake_subset_fun <- function(
     allow_empty = allow_empty
   )
   if (identical(fun, "Empty pathway")) {
-    return(list(orfs = list(table = data.frame(), tpm = data.frame())))
+    return(list(
+      orfs = list(table = data.frame(), tpm = data.frame()),
+      functions = list(KEGG = list(tpm = data.frame()))
+    ))
   }
   list(
     orfs = list(
       table = data.frame(value = 1, row.names = "orf_1"),
       tpm = data.frame(S1 = 1, row.names = "orf_1")
-    )
+    ),
+    functions = list(KEGG = list(tpm = data.frame(S1 = 1, row.names = "K00001")))
   )
 }
 pathway_entries <- list(
@@ -82,7 +86,10 @@ prepared <- withCallingHandlers(
     context_sqm = list(),
     pathway_entries = pathway_entries,
     context_label = "global",
-    subset_fun = fake_subset_fun
+    subset_fun = fake_subset_fun,
+    include_kegg_oracle = TRUE,
+    pathway_ko_resolver = function(...) stop("KGML resolver must not select pathway data"),
+    selected_samples = "S1"
   ),
   warning = function(condition) {
     warnings <<- c(warnings, conditionMessage(condition))
