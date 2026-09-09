@@ -87,9 +87,22 @@ flow <- need("build_flow_table")(
   top_n_ko = 1L,
   top_n_taxa = 1L
 )
-stopifnot(all(c("sample", "ko_id", "taxon", "tpm", "percent") %in% names(flow)))
+stopifnot(all(c(
+  "sample", "ko_id", "taxon", "tpm", "percent", "kegg_function",
+  "ec_codes", "taxon_percent", "ko_percent"
+) %in% names(flow)))
 expect_close(sum(flow$tpm), 150, "FLOW changed allocated mass")
 expect_close(sum(flow$percent), 100, "FLOW percentages do not close")
+stopifnot(
+  identical(unique(flow$kegg_function[flow$ko_id == "K00001"]), "Primary KO"),
+  identical(unique(flow$ec_codes[flow$ko_id == "K00001"]), "1.1.1.1"),
+  identical(unique(flow$kegg_function[flow$ko_id == "Other"]), "Other KOs"),
+  all(is.na(flow$ec_codes[flow$ko_id == "Other"]))
+)
+expect_close(unique(flow$taxon_percent[flow$taxon == "Alpha"]), 60,
+             "FLOW taxonomy share changed")
+expect_close(unique(flow$ko_percent[flow$ko_id == "K00001"]), 100 / 1.5,
+             "FLOW KO share changed")
 
 taxon_levels <- unique(flow$taxon)
 ko_levels <- unique(flow$ko_id)
@@ -100,7 +113,7 @@ stopifnot(
   identical(unname(flow_palette["Other"]), "grey70")
 )
 
-flow_plot <- need("make_flow_plot")(flow)
+flow_plot <- need("make_flow_plot")(flow, "Synthetic pathway", "phylum", "S1")
 flow_built <- ggplot2::ggplot_build(flow_plot)
 flow_strata <- flow_built$data[[2L]]
 expected_strata_colors <- toupper(unname(flow_palette[as.character(flow_strata$stratum)]))
@@ -109,7 +122,22 @@ stopifnot(
   identical(toupper(as.character(flow_strata$fill)), expected_strata_colors),
   !any(toupper(as.character(flow_strata$fill)) %in% c("WHITE", "#FFFFFF"))
 )
-
+fill_scale <- flow_built$plot$scales$get_scales("fill")
+colour_scale <- flow_built$plot$scales$get_scales("colour")
+stopifnot(
+  identical(flow_plot$labels$title, "Flowplot - Synthetic pathway - phylum - S1"),
+  identical(flow_plot$labels$subtitle, "Taxonomy-to-KO flow from the ORF x sample x KO table"),
+  identical(flow_plot$labels$y, "Relative flow (%)"),
+  identical(sort(unique(as.character(flow_built$data[[3L]]$label))),
+            sort(c("Alpha", "Other", "K00001"))),
+  isTRUE(all.equal(max(flow_built$data[[1L]]$ymax), 100, tolerance = 1e-10)),
+  identical(fill_scale$name, "Taxonomy"),
+  identical(fill_scale$labels, c("Alpha | 60.0%", "Other | 40.0%")),
+  identical(colour_scale$name, "Function (KO / EC)"),
+  identical(colour_scale$labels,
+            c("K00001 / EC 1.1.1.1 | 66.7%", "Other KOs | 33.3%")),
+  identical(flow_plot$theme$legend.position, "right")
+)
 unclassified <- allocated
 unclassified$phylum <- NA_character_
 unclassified_flow <- need("build_flow_table")(unclassified, "S1", "phylum", 2L, 2L)
@@ -153,11 +181,20 @@ funz_manifest <- do.call(need("render_funz"), c(list(table = funz), render_args)
 flow_manifest <- do.call(need("render_flow"), c(list(table = flow), render_args))
 pie_manifest <- do.call(need("render_pie"), c(list(table = pie), render_args))
 assert_renderer(funz_manifest, output_dir, "funz")
-assert_renderer(flow_manifest, output_dir, "flowplot")
+flow_paths <- assert_renderer(flow_manifest, output_dir, "flowplot")
 assert_renderer(pie_manifest, output_dir, "pie")
+flow_tsv <- utils::read.delim(
+  flow_paths[grepl("\\.tsv$", flow_paths, ignore.case = TRUE)][[1L]],
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+stopifnot(
+  all(c("kegg_function", "ec_codes", "taxon_percent", "ko_percent") %in% names(flow_tsv)),
+  isTRUE(all.equal(sum(flow_tsv$flow_percent), 100, tolerance = 1e-10))
+)
 
 if (requireNamespace("plotly", quietly = TRUE) && requireNamespace("htmlwidgets", quietly = TRUE)) {
-  flow_widget <- need("make_flow_sankey")(flow)
+  flow_widget <- need("make_flow_sankey")(flow, "Synthetic pathway", "phylum", "S1")
   flow_trace <- plotly::plotly_build(flow_widget)$x$data[[1L]]
   expected_node_colors <- toupper(unname(flow_palette[c(taxon_levels, ko_levels)]))
   observed_node_colors <- toupper(as.character(unlist(flow_trace$node$color, use.names = FALSE)))
@@ -168,7 +205,22 @@ if (requireNamespace("plotly", quietly = TRUE) && requireNamespace("htmlwidgets"
   observed_link_colors <- toupper(as.character(unlist(flow_trace$link$color, use.names = FALSE)))
   stopifnot(
     identical(observed_node_colors, expected_node_colors),
-    identical(observed_link_colors, expected_link_colors)
+    identical(observed_link_colors, expected_link_colors),
+    identical(as.character(unlist(flow_trace$node$label, use.names = FALSE)), c(
+      "Alpha | 60.0%", "Other | 40.0%",
+      "K00001 / EC 1.1.1.1 | 66.7%", "Other KOs | 33.3%"
+    )),
+    isTRUE(all.equal(as.numeric(unlist(flow_trace$link$value)), flow$flow_percent,
+                     tolerance = 1e-10)),
+    identical(as.character(flow_trace$valueformat), ".2f"),
+    identical(as.character(flow_trace$valuesuffix), "%"),
+    all(grepl("Taxon share:|Function share:|TPM:|Flow:",
+              as.character(unlist(flow_trace$link$customdata)))),
+    any(grepl("Function: Primary KO", as.character(unlist(flow_trace$link$customdata)), fixed = TRUE)),
+    identical(
+      as.character(plotly::plotly_build(flow_widget)$x$layout$title$text),
+      "Flowplot - Synthetic pathway - phylum - S1<br><sup>Taxonomy-to-KO flow based on TPM</sup>"
+    )
   )
 
   flow_html <- do.call(

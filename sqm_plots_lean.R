@@ -262,11 +262,19 @@ build_flow_table <- function(allocated, samples, rank, top_n_ko = 20L, top_n_tax
   data <- as.data.frame(allocated, check.names = FALSE)
   if (!rank %in% names(data)) stop("Missing taxonomy rank: ", rank, call. = FALSE)
   data <- data[data$sample %in% samples & data$tpm > 0, , drop = FALSE]
+  if (!"kegg_function" %in% names(data)) data$kegg_function <- data$ko_id
+  if (!"ec_codes" %in% names(data)) data$ec_codes <- NA_character_
   data$taxon <- as.character(data[[rank]])
   data$taxon[is.na(data$taxon) | !nzchar(trimws(data$taxon))] <- "Unclassified"
   if (any(data$taxon == "Other")) stop("Other is reserved for collapsed taxa.", call. = FALSE)
   kos <- top_values(data, "ko_id", "tpm", top_n_ko, reserved = character())
   taxa <- top_values(data, "taxon", "tpm", top_n_taxa)
+  metadata <- data[match(kos, data$ko_id), c("ko_id", "kegg_function", "ec_codes"), drop = FALSE]
+  metadata$kegg_function[is.na(metadata$kegg_function) | !nzchar(metadata$kegg_function)] <-
+    metadata$ko_id[is.na(metadata$kegg_function) | !nzchar(metadata$kegg_function)]
+  metadata <- rbind(metadata, data.frame(
+    ko_id = "Other", kegg_function = "Other KOs", ec_codes = NA_character_
+  ))
   data$ko_id <- ifelse(data$ko_id %in% kos, data$ko_id, "Other")
   data$taxon <- ifelse(data$taxon %in% c(taxa, "Unclassified", "Unmapped"), data$taxon, "Other")
   table <- aggregate(data$tpm, data[c("sample", "taxon", "ko_id")], sum)
@@ -274,8 +282,19 @@ build_flow_table <- function(allocated, samples, rank, top_n_ko = 20L, top_n_tax
   denominators <- aggregate(table$tpm, list(sample = table$sample), sum)
   names(denominators)[[2L]] <- "pathway_tpm"
   table <- merge(table, denominators, by = "sample", sort = FALSE)
+  taxon_totals <- aggregate(table$tpm, table[c("sample", "taxon")], sum)
+  names(taxon_totals)[[3L]] <- "taxon_tpm"
+  ko_totals <- aggregate(table$tpm, table[c("sample", "ko_id")], sum)
+  names(ko_totals)[[3L]] <- "ko_tpm"
+  table <- merge(table, taxon_totals, by = c("sample", "taxon"), sort = FALSE)
+  table <- merge(table, ko_totals, by = c("sample", "ko_id"), sort = FALSE)
+  table <- merge(table, metadata, by = "ko_id", all.x = TRUE, sort = FALSE)
   table$flow_percent <- 100 * table$tpm / table$pathway_tpm
   table$percent <- table$flow_percent
+  table$taxon_percent <- 100 * table$taxon_tpm / table$pathway_tpm
+  table$ko_percent <- 100 * table$ko_tpm / table$pathway_tpm
+  table$taxon_tpm <- NULL
+  table$ko_tpm <- NULL
   table$rank <- rank
   table$sample <- factor(table$sample, levels = samples)
   table <- table[order(table$sample, -table$tpm, table$taxon, table$ko_id), , drop = FALSE]
@@ -330,44 +349,156 @@ build_flow_color_map <- function(taxon_levels, ko_levels = character()) {
   )
 }
 
-make_flow_plot <- function(table) {
-  taxon_levels <- unique(as.character(table$taxon))
-  ko_levels <- unique(as.character(table$ko_id))
+flow_category_levels <- function(table, column) {
+  totals <- aggregate(table$tpm, list(label = as.character(table[[column]])), sum)
+  totals$label[order(totals$label == "Other", totals$x, totals$label)]
+}
+
+format_flow_percent <- function(x) {
+  labels <- paste0(formatC(x, format = "f", digits = 1), "%")
+  labels[is.na(x)] <- "NA%"
+  labels[!is.na(x) & x > 0 & x < 0.1] <- "<0.1%"
+  labels
+}
+
+build_flow_legend_labels <- function(table, taxon_levels, ko_levels) {
+  taxon_rows <- match(taxon_levels, as.character(table$taxon))
+  ko_rows <- match(ko_levels, as.character(table$ko_id))
+  ec_codes <- trimws(as.character(table$ec_codes[ko_rows]))
+  ec_codes[is.na(ec_codes) | !nzchar(ec_codes)] <- "NA"
+  ko_names <- ifelse(ko_levels == "Other", "Other KOs", paste0(ko_levels, " / EC ", ec_codes))
+  list(
+    taxonomy = stats::setNames(
+      paste0(taxon_levels, " | ", format_flow_percent(table$taxon_percent[taxon_rows])),
+      taxon_levels
+    ),
+    functional = stats::setNames(
+      paste0(ko_names, " | ", format_flow_percent(table$ko_percent[ko_rows])),
+      ko_levels
+    )
+  )
+}
+
+make_flow_plot <- function(table, pathway_name, rank, sample_name) {
+  taxon_levels <- flow_category_levels(table, "taxon")
+  ko_levels <- flow_category_levels(table, "ko_id")
   palette <- build_flow_color_map(taxon_levels, ko_levels)
+  legend_labels <- build_flow_legend_labels(table, taxon_levels, ko_levels)
   plot_table <- transform(
     table,
     taxon = factor(taxon, levels = taxon_levels),
     ko_id = factor(ko_id, levels = ko_levels)
   )
-  ggplot2::ggplot(plot_table, ggplot2::aes(axis1 = taxon, axis2 = ko_id, y = tpm)) +
-    ggalluvial::geom_alluvium(ggplot2::aes(fill = taxon), width = 0.1) +
+  ko_legend <- data.frame(ko_id = factor(ko_levels, levels = ko_levels))
+  ggplot2::ggplot(plot_table, ggplot2::aes(axis1 = taxon, axis2 = ko_id, y = flow_percent)) +
+    ggalluvial::geom_alluvium(ggplot2::aes(fill = taxon), alpha = 0.72, width = 1 / 12) +
     ggalluvial::geom_stratum(
       ggplot2::aes(fill = ggplot2::after_stat(stratum)),
-      width = 0.1
+      width = 1 / 5,
+      color = "grey35",
+      linewidth = 0.25
     ) +
-    ggplot2::scale_fill_manual(values = palette, drop = FALSE) +
-    ggplot2::theme_minimal()
+    ggplot2::geom_text(
+      stat = ggalluvial::StatStratum,
+      ggplot2::aes(label = ggplot2::after_stat(stratum)),
+      size = 2.8
+    ) +
+    ggplot2::scale_fill_manual(
+      name = "Taxonomy", values = palette, breaks = taxon_levels,
+      labels = unname(legend_labels$taxonomy[taxon_levels]), drop = FALSE
+    ) +
+    ggplot2::geom_point(
+      data = ko_legend,
+      ggplot2::aes(x = 1, y = 0, colour = ko_id),
+      inherit.aes = FALSE,
+      alpha = 0,
+      show.legend = TRUE
+    ) +
+    ggplot2::scale_colour_manual(
+      name = "Function (KO / EC)", values = palette, breaks = ko_levels,
+      labels = unname(legend_labels$functional[ko_levels]), drop = FALSE
+    ) +
+    ggplot2::guides(
+      fill = ggplot2::guide_legend(order = 1),
+      colour = ggplot2::guide_legend(
+        order = 2, override.aes = list(alpha = 1, shape = 15, size = 4)
+      )
+    ) +
+    ggplot2::scale_x_discrete(limits = c("Taxon", "KO"), expand = c(0.08, 0.08)) +
+    ggplot2::labs(
+      title = paste0("Flowplot - ", pathway_name, " - ", rank, " - ", sample_name),
+      subtitle = "Taxonomy-to-KO flow from the ORF x sample x KO table",
+      x = NULL,
+      y = "Relative flow (%)"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      legend.position = "right",
+      legend.title = ggplot2::element_text(face = "bold"),
+      legend.text = ggplot2::element_text(size = 8),
+      legend.key.size = grid::unit(0.55, "lines"),
+      axis.text.y = ggplot2::element_blank(),
+      panel.grid = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold")
+    )
 }
 
-make_flow_sankey <- function(table) {
-  taxon_levels <- unique(as.character(table$taxon))
-  ko_levels <- unique(as.character(table$ko_id))
+make_flow_sankey <- function(table, pathway_name, rank, sample_name) {
+  taxon_levels <- flow_category_levels(table, "taxon")
+  ko_levels <- flow_category_levels(table, "ko_id")
   palette <- build_flow_color_map(taxon_levels, ko_levels)
-  nodes <- c(paste0("tax:", taxon_levels), paste0("ko:", ko_levels))
+  legend_labels <- build_flow_legend_labels(table, taxon_levels, ko_levels)
+  taxon_percents <- stats::setNames(
+    table$taxon_percent[match(taxon_levels, as.character(table$taxon))], taxon_levels
+  )
+  ko_percents <- stats::setNames(
+    table$ko_percent[match(ko_levels, as.character(table$ko_id))], ko_levels
+  )
   plotly::plot_ly(
     type = "sankey",
     arrangement = "snap",
+    valueformat = ".2f",
+    valuesuffix = "%",
     node = list(
-      label = sub("^[^:]+:", "", nodes),
+      pad = 18,
+      thickness = 18,
+      line = list(color = "rgba(70,70,70,0.35)", width = 0.5),
+      label = c(
+        unname(legend_labels$taxonomy[taxon_levels]),
+        unname(legend_labels$functional[ko_levels])
+      ),
       color = unname(palette[c(taxon_levels, ko_levels)])
     ),
     link = list(
-      source = match(paste0("tax:", table$taxon), nodes) - 1L,
-      target = match(paste0("ko:", table$ko_id), nodes) - 1L,
-      value = table$tpm,
-      color = unname(grDevices::adjustcolor(palette[table$taxon], alpha.f = 0.65))
+      source = match(as.character(table$taxon), taxon_levels) - 1L,
+      target = length(taxon_levels) + match(as.character(table$ko_id), ko_levels) - 1L,
+      value = table$flow_percent,
+      color = unname(grDevices::adjustcolor(
+        palette[as.character(table$taxon)], alpha.f = 0.65
+      )),
+      customdata = paste0(
+        "Taxon: ", table$taxon,
+        "<br>Taxon share: ",
+        format_flow_percent(unname(taxon_percents[as.character(table$taxon)])),
+        "<br>KO: ", table$ko_id,
+        "<br>EC: ", ifelse(is.na(table$ec_codes), "NA", table$ec_codes),
+        "<br>Function: ", table$kegg_function,
+        "<br>Function share: ",
+        format_flow_percent(unname(ko_percents[as.character(table$ko_id)])),
+        "<br>TPM: ", sprintf("%.3f", table$tpm),
+        "<br>Flow: ", sprintf("%.2f", table$flow_percent), "%"
+      ),
+      hovertemplate = "%{customdata}<extra></extra>"
     )
-  )
+  ) |>
+    plotly::layout(
+      title = list(text = paste0(
+        "Flowplot - ", pathway_name, " - ", rank, " - ", sample_name,
+        "<br><sup>Taxonomy-to-KO flow based on TPM</sup>"
+      )),
+      font = list(size = 11),
+      margin = list(l = 20, r = 20, t = 60, b = 20)
+    )
 }
 
 save_plot <- function(plot, path, width, height, dpi) {
@@ -410,7 +541,7 @@ render_flow <- function(table, context, pathway_id, pathway_name, width, height,
   directory <- file.path(context$output_dir, "flowplot", selection_dir(context$selection), safe_name(pathway_name), safe_name(rank))
   stem <- paste0("flow_", safe_name(sample))
   data_path <- write_table(table, file.path(directory, paste0(stem, "_data.tsv")))
-  plot <- make_flow_plot(table)
+  plot <- make_flow_plot(table, pathway_name, rank, sample)
   plot_path <- save_plot(plot, file.path(directory, paste0(stem, "_", safe_name(dimension_name), ".png")), width, height, dpi)
   rbind(
     artifact_manifest("flow", "data_tsv", data_path, pathway_id, pathway_name, context, rank = rank),
@@ -422,7 +553,7 @@ render_flow_html <- function(table, context, pathway_id, pathway_name) {
   rank <- unique(table$rank)[[1L]]
   sample <- paste(unique(as.character(table$sample)), collapse = "_")
   directory <- file.path(context$output_dir, "flowplot", selection_dir(context$selection), safe_name(pathway_name), safe_name(rank))
-  widget <- make_flow_sankey(table)
+  widget <- make_flow_sankey(table, pathway_name, rank, sample)
   path <- file.path(directory, paste0("flow_", safe_name(sample), ".html"))
   dir.create(directory, recursive = TRUE, showWarnings = FALSE)
   htmlwidgets::saveWidget(widget, path, selfcontained = TRUE)
