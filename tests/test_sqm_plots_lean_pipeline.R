@@ -72,6 +72,15 @@ fake_subset_fun <- function(SQM, fun, ...) {
   subset_calls <<- c(subset_calls, fun)
   subset <- SQM
   subset$source <- paste0("subset:", fun)
+  ids <- if (identical(fun, "First pathway")) c("orf1", "orf2") else "orf3"
+  for (name in names(subset$orfs)) {
+    subset$orfs[[name]] <- subset$orfs[[name]][ids, , drop = FALSE]
+  }
+  subset$functions$KEGG$tpm <- if (identical(fun, "First pathway")) {
+    data.frame(S1 = c(50, 20), row.names = c("K00001", "K00002"))
+  } else {
+    data.frame(S1 = 10, row.names = "K00002")
+  }
   subset
 }
 taxonomy_sources <- character()
@@ -169,7 +178,7 @@ empty_result <- run_pipeline(
   )),
   function(...) "K00003", fake_plot_taxonomy, fake_export_pathway
 )
-stopifnot(nrow(empty_result$errors) == 0L)
+stopifnot(nrow(empty_result$errors) == 1L, identical(empty_result$errors$mode, "prepare"))
 
 output_dir <- tempfile("lean_pipeline_all_")
 dir.create(output_dir)
@@ -187,6 +196,28 @@ stopifnot(
   all(pathview_sources == "context"),
   length(list.files(file.path(output_dir, "pathview"), pattern = "\\.tsv$", recursive = TRUE)) == 0L,
   length(list.files(file.path(output_dir, "taxonomy_by_pathway"), pattern = "\\.tsv$", recursive = TRUE)) == 0L
+)
+funz_data <- utils::read.delim(file.path(
+  output_dir, "funz", "pathway", "definiti", "First_pathway", "barplot_ko_data.tsv"
+), check.names = FALSE, stringsAsFactors = FALSE)
+flow_data <- utils::read.delim(file.path(
+  output_dir, "flowplot", "definiti", "First_pathway", "phylum", "flow_S1_data.tsv"
+), check.names = FALSE, stringsAsFactors = FALSE)
+pie_files <- list.files(
+  file.path(output_dir, "pie", "definiti", "First_pathway"),
+  pattern = "pie_data\\.tsv$", recursive = TRUE, full.names = TRUE
+)
+pie_data <- do.call(rbind, lapply(pie_files, utils::read.delim,
+                                 check.names = FALSE, stringsAsFactors = FALSE))
+ko_totals <- function(table) {
+  result <- aggregate(table$tpm, list(ko_id = as.character(table$ko_id)), sum)
+  stats::setNames(result$x, result$ko_id)
+}
+expected_native_tpm <- c(K00001 = 50, K00002 = 20)
+stopifnot(
+  isTRUE(all.equal(ko_totals(funz_data), expected_native_tpm, check.attributes = FALSE)),
+  isTRUE(all.equal(ko_totals(flow_data), expected_native_tpm, check.attributes = FALSE)),
+  isTRUE(all.equal(ko_totals(pie_data), expected_native_tpm, check.attributes = FALSE))
 )
 stopifnot(length(list.files(file.path(output_dir, "funz"), pattern = "enzim", recursive = TRUE, ignore.case = TRUE)) > 0L)
 stopifnot(length(list.files(file.path(output_dir, "funz", "enzimi", "separato"), pattern = "\\.png$", recursive = TRUE)) > 0L)

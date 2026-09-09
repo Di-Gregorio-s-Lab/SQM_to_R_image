@@ -592,34 +592,27 @@ render_taxonomy <- function(sqm_object, samples, rank, context, pathway_id, path
   } else {
     file.path(context$output_dir, root, selection_dir(context$selection), safe_name(pathway_name), count, safe_name(rank))
   }
-  data_path <- write_table(as.data.frame(plot$data), file.path(directory, "taxonomy_data.tsv"))
+  unlink(file.path(directory, "taxonomy_data.tsv"), force = TRUE)
   plot_path <- save_plot(plot, file.path(directory, paste0("taxonomy_", safe_name(dimension_name), ".png")), width, height, dpi)
-  rbind(
-    artifact_manifest("taxon", "data_tsv", data_path, pathway_id, pathway_name, context, paste(samples, collapse = ","), rank),
-    artifact_manifest("taxon", "plot_png", plot_path, pathway_id, pathway_name, context, paste(samples, collapse = ","), rank)
-  )
+  artifact_manifest("taxon", "plot_png", plot_path, pathway_id, pathway_name, context,
+                    paste(samples, collapse = ","), rank)
 }
 
 export_pathview_isolated <- function(export_pathway_fn, sqm_object, pathway_id,
                                      selected_samples, final_dir) {
-  temporary <- tempfile("sqm_pathview_")
-  dir.create(temporary, recursive = TRUE, showWarnings = FALSE)
-  on.exit(unlink(temporary, recursive = TRUE, force = TRUE), add = TRUE)
+  dir.create(final_dir, recursive = TRUE, showWarnings = FALSE)
+  unlink(file.path(final_dir, c(
+    "pathview_input_all_ko_complete_matrix.tsv", "pathview_render_config.tsv"
+  )), force = TRUE)
   export_pathway_fn(
     SQM = sqm_object, pathway_id = pathway_id, count = "tpm", samples = selected_samples,
-    split_samples = FALSE, log_scale = FALSE, output_dir = normalizePath(temporary, winslash = "/"),
+    split_samples = FALSE, log_scale = FALSE, output_dir = normalizePath(final_dir, winslash = "/"),
     output_suffix = paste0("pathview_", pathway_id)
   )
-  files <- list.files(temporary, recursive = TRUE, full.names = TRUE)
+  files <- list.files(final_dir, recursive = TRUE, full.names = TRUE)
   files <- files[file.info(files)$isdir %in% FALSE & file.info(files)$size > 0]
   if (!length(files)) stop("Pathview produced no files.", call. = FALSE)
-  relative <- substring(files, nchar(temporary) + 2L)
-  targets <- file.path(final_dir, relative)
-  for (i in seq_along(files)) {
-    dir.create(dirname(targets[[i]]), recursive = TRUE, showWarnings = FALSE)
-    if (!file.copy(files[[i]], targets[[i]], overwrite = TRUE)) stop("Cannot copy Pathview output.", call. = FALSE)
-  }
-  data.frame(output_file = normalizePath(targets, winslash = "/", mustWork = TRUE), stringsAsFactors = FALSE)
+  data.frame(output_file = normalizePath(files, winslash = "/", mustWork = TRUE), stringsAsFactors = FALSE)
 }
 
 write_atomic <- function(contents, path) {
@@ -813,11 +806,8 @@ prepare_analysis <- function(sqm, pathway_ko_ids, samples) {
   official$tpm <- mapply(function(ko, sample) {
     if (ko %in% rownames(official_matrix)) as.numeric(official_matrix[ko, sample]) else 0
   }, official$ko_id, official$sample)
-  orf_table <- as.data.frame(sqm$orfs$table, check.names = FALSE)
-  keep <- vapply(orf_table[["KEGG ID"]], function(value) length(intersect(extract_ko_ids(value), pathway_ko_ids)) > 0L,
-                 logical(1L))
   list(data = allocated, totals = official, metadata = metadata,
-       pathway_sqm = subset_sqm_ids(sqm, rownames(orf_table)[keep]))
+       pathway_sqm = sqm)
 }
 
 build_enzyme_table <- function(sqm, samples, requested_ecs = NULL) {
@@ -944,7 +934,8 @@ write_mode_manifest <- function(rows, output_dir, mode) {
 
 run_pipeline <- function(sqm, config, catalog, kgml_loader,
                          plot_taxonomy_fn = SQMtools::plotTaxonomy,
-                         export_pathway_fn = SQMtools::exportPathway) {
+                         export_pathway_fn = SQMtools::exportPathway,
+                         subset_fun = SQMtools::subsetFun) {
   required <- c("output_dir", "mode", "samples", "ranks", "counts", "dimensions",
                 "top_n_pathways", "top_n_ko", "top_n_taxa", "workers", "plan_only")
   missing <- setdiff(required, names(config))
@@ -985,8 +976,12 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
   for (entry in entries) {
     key <- paste(entry$selection, entry$pathway_id, sep = ":")
     tryCatch({
-      entry$ko_ids <- kgml_loader(entry$pathway_id)
-      entry$analysis <- prepare_analysis(sqm, entry$ko_ids, config$samples)
+      pathway_sqm <- subset_fun(
+        SQM = sqm, fun = entry$pathway_name, columns = "KEGGPATH",
+        ignore_case = FALSE, fixed = TRUE, allow_empty = FALSE
+      )
+      entry$ko_ids <- rownames(pathway_sqm$functions$KEGG$tpm)
+      entry$analysis <- prepare_analysis(pathway_sqm, entry$ko_ids, config$samples)
       prepared[[key]] <- entry
     }, error = function(error) {
       errors[[length(errors) + 1L]] <<- data.frame(
@@ -1062,14 +1057,7 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
         directory <- file.path(config$output_dir, "pathview", selection_dir(entry$selection), sample_mode,
                                safe_name(entry$pathway_name))
         if (sample_mode == "separato") directory <- file.path(directory, safe_name(samples))
-        kegg <- as.data.frame(entry$analysis$pathway_sqm$functions$KEGG$tpm, check.names = FALSE)
-        input <- data.frame(ko_id = rownames(kegg), kegg[samples], row.names = NULL, check.names = FALSE)
-        write_table(input, file.path(directory, "pathview_input_all_ko_complete_matrix.tsv"))
-        write_table(data.frame(
-          pathway_id = entry$pathway_id, samples = paste(samples, collapse = ","),
-          split_samples = FALSE, log_scale = FALSE, stringsAsFactors = FALSE
-        ), file.path(directory, "pathview_render_config.tsv"))
-        export_pathview_isolated(export_pathway_fn, entry$analysis$pathway_sqm, entry$pathway_id, samples, directory)
+        export_pathview_isolated(export_pathway_fn, sqm, entry$pathway_id, samples, directory)
       }, error = function(error) errors[[length(errors) + 1L]] <<- data.frame(
         task_id = paste(key, "pathview", sample_mode, paste(samples, collapse = ","), sep = ":"),
         mode = "pathview", pathway_id = entry$pathway_id, error = conditionMessage(error),
