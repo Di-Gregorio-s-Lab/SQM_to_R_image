@@ -1909,70 +1909,17 @@ prepare_context_pathway_subsets <- function(
         !grepl("^[0-9]{5}$", pathway_info$pathway_id)) {
       pathway_info$pathway_id <- pathway_id_resolver(pathway_info$pathway_name)
     }
-    pathway_ko_ids <- NULL
-    if (isTRUE(include_kegg_oracle)) {
-      if (!pathview_is_exportable(
-          pathway_info$pathway_selection,
-          pathway_info$pathway_id
-      )) {
-        stop(
-          "KEGG pathway analysis requires a resolvable pathway ID for '",
-          pathway_info$pathway_name,
-          "'.",
-          call. = FALSE
-        )
-      }
-      pathway_ko_ids <- pathway_ko_resolver(pathway_info$pathway_id)
-      if (length(pathway_ko_ids) == 0L) {
-        warning(
-          "No ortholog nodes in KEGG pathway ",
-          pathway_info$pathway_id,
-          " (",
-          pathway_info$pathway_name,
-          ").",
-          call. = FALSE
-        )
-        skips <- bind_rows(
-          skips,
-          tibble::tibble(
-            context = as.character(context_label),
-            pathway = pathway_info$pathway_name,
-            reason = "no_ortholog_nodes"
-          )
-        )
-        next
-      }
-    }
-
-    pathway_sqm <- if (isTRUE(include_kegg_oracle)) {
-      subset_orfs_by_ko_membership(context_sqm, pathway_ko_ids)
+    pathway_sqm <- subset_pathway(
+      context_sqm,
+      pathway_info$pathway_name,
+      subset_fun = subset_fun
+    )
+    pathway_ko_ids <- if (isTRUE(include_kegg_oracle)) {
+      rownames(pathway_sqm$functions$KEGG$tpm)
     } else {
-      subset_pathway(
-        context_sqm,
-        pathway_info$pathway_name,
-        subset_fun = subset_fun
-      )
+      NULL
     }
     if (is_empty_pathway_subset(pathway_sqm)) {
-      if (isTRUE(include_kegg_oracle)) {
-        kegg_tpm <- as.data.frame(
-          context_sqm$functions$KEGG$tpm,
-          check.names = FALSE
-        )
-        available_ko_ids <- intersect(pathway_ko_ids, rownames(kegg_tpm))
-        if (length(available_ko_ids) > 0L &&
-            any(as.matrix(kegg_tpm[
-              available_ko_ids,
-              selected_samples,
-              drop = FALSE
-            ]) > 0)) {
-          stop(
-            "Cannot allocate positive official SQM KEGG TPM without ORFs for pathway ",
-            pathway_info$pathway_id, " (", pathway_info$pathway_name, ").",
-            call. = FALSE
-          )
-        }
-      }
       warning(
         "Skipping empty context x pathway combination: context=", context_label,
         " | pathway=", pathway_info$pathway_name,
@@ -1983,7 +1930,7 @@ prepare_context_pathway_subsets <- function(
         tibble::tibble(
           context = as.character(context_label),
           pathway = pathway_info$pathway_name,
-          reason = if (isTRUE(include_kegg_oracle)) "empty_ko_subset" else "empty_subset"
+          reason = "empty_subset"
         )
       )
       next
@@ -2676,8 +2623,9 @@ build_pathway_analysis <- function(pathway_info, selected_samples) {
   }
   pathway_ko_ids <- pathway_info$pathway_ko_ids
   if (!is.null(pathway_ko_ids)) {
+    pathway_ko_ids <- rownames(pathway_info$pathway_sqm$functions$KEGG$tpm)
     orf_long_result <- build_pathway_ko_result(
-      context_sqm = context_sqm,
+      context_sqm = pathway_info$pathway_sqm,
       selected_samples = selected_samples,
       pathway_ko_ids = pathway_ko_ids
     )

@@ -182,6 +182,7 @@ if (any(mismatched)) {
 
 stopifnot(isTRUE(all.equal(
   enzyme_values,
-  as.numeric(full_sqm$functions$KEGG$tpm["K01563", selected_samples])
+  as.numeric(full_sqm$functions$KEGG$tpm["K01563", selected_samples]),
+  check.attributes = FALSE
 )))
 message("PASS: FUNZ, PIE and taxonomy share the pathway subset; ENZIMI stays global")
