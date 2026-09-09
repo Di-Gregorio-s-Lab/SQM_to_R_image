@@ -520,13 +520,47 @@ artifact_manifest <- function(mode, type, path, pathway_id, pathway_name, contex
   )
 }
 
+make_funz_plot <- function(table, pathway_name) {
+  totals <- aggregate(table$tpm, list(ko_id = as.character(table$ko_id)), sum)
+  ko_levels <- totals$ko_id[order(totals$ko_id == "Other", -totals$x, totals$ko_id)]
+  samples <- unique(as.character(table$sample))
+  labels <- vapply(ko_levels, function(ko) {
+    rows <- table[as.character(table$ko_id) == ko, , drop = FALSE]
+    rows <- rows[match(samples, as.character(rows$sample)), , drop = FALSE]
+    ecs <- rows$ec_codes[!is.na(rows$ec_codes) & nzchar(rows$ec_codes)]
+    ec <- if (ko == "Other" || !length(ecs)) "NA" else ecs[[1L]]
+    name <- if (ko == "Other") "Other KOs" else ko
+    paste0(name, " / EC ", ec, " | ", paste(format_flow_percent(rows$percent), collapse = " | "))
+  }, character(1L))
+  palette <- c(
+    stats::setNames(rep(colors_hex, length.out = length(setdiff(ko_levels, "Other"))),
+                    setdiff(ko_levels, "Other")),
+    if ("Other" %in% ko_levels) c(Other = "grey70") else NULL
+  )
+  plot_table <- transform(table, ko_id = factor(ko_id, levels = ko_levels))
+  ggplot2::ggplot(plot_table, ggplot2::aes(x = sample, y = tpm, fill = ko_id)) +
+    ggplot2::geom_col(color = "grey25", linewidth = 0.15, width = 0.78) +
+    ggplot2::scale_fill_manual(values = palette, labels = stats::setNames(labels, ko_levels), drop = FALSE) +
+    ggplot2::scale_x_discrete(limits = samples, drop = FALSE) +
+    ggplot2::scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+    ggplot2::labs(title = paste0("KO barplot - ", pathway_name), x = "Sample", y = "TPM",
+                  fill = "KO / EC | % per sample") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+      panel.grid.major.x = ggplot2::element_blank(), panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold"), legend.position = "right",
+      legend.title = ggplot2::element_text(face = "bold"), legend.text = ggplot2::element_text(size = 8),
+      legend.key.size = grid::unit(0.55, "lines")
+    ) +
+    ggplot2::guides(fill = ggplot2::guide_legend(ncol = 1, byrow = TRUE))
+}
+
 render_funz <- function(table, context, pathway_id, pathway_name, width, height, dpi,
                         dimension_name = paste0(width, "x", height)) {
   directory <- file.path(context$output_dir, "funz", "pathway", selection_dir(context$selection), safe_name(pathway_name))
   data_path <- write_table(table, file.path(directory, "barplot_ko_data.tsv"))
-  plot <- ggplot2::ggplot(table, ggplot2::aes(x = sample, y = percent, fill = ko_id)) +
-    ggplot2::geom_col() + ggplot2::labs(x = "Sample", y = "% pathway TPM", fill = "KO") +
-    ggplot2::theme_minimal()
+  plot <- make_funz_plot(table, pathway_name)
   plot_path <- save_plot(plot, file.path(directory, paste0("barplot_ko_", safe_name(dimension_name), ".png")), width, height, dpi)
   rbind(
     artifact_manifest("funz", "data_tsv", data_path, pathway_id, pathway_name, context),
@@ -833,6 +867,45 @@ build_enzyme_table <- function(sqm, samples, requested_ecs = NULL) {
   table[order(match(table$sample, samples), table$ec_code), , drop = FALSE]
 }
 
+enzyme_palette <- function(enzyme_ecs) {
+  stats::setNames(rep(colors_hex, length.out = length(enzyme_ecs)), enzyme_ecs)
+}
+
+make_enzyme_barplot <- function(table, title) {
+  ec_levels <- unique(as.character(table$ec_code))
+  plot_table <- transform(table, ec_code = factor(ec_code, levels = ec_levels))
+  ggplot2::ggplot(plot_table, ggplot2::aes(x = sample, y = tpm, fill = ec_code)) +
+    ggplot2::geom_col(position = ggplot2::position_dodge2(preserve = "single"),
+                      color = "grey25", linewidth = 0.15, width = 0.78) +
+    ggplot2::scale_fill_manual(values = enzyme_palette(ec_levels), drop = FALSE) +
+    ggplot2::scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+    ggplot2::labs(title = title, x = "Sample", y = "TPM", fill = "EC") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+      panel.grid.major.x = ggplot2::element_blank(), panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold"), legend.position = "right",
+      legend.title = ggplot2::element_text(face = "bold")
+    )
+}
+
+make_enzyme_lineplot <- function(table, title) {
+  ec_levels <- unique(as.character(table$ec_code))
+  plot_table <- transform(table, ec_code = factor(ec_code, levels = ec_levels))
+  ggplot2::ggplot(plot_table, ggplot2::aes(x = sample, y = tpm, colour = ec_code, group = ec_code)) +
+    ggplot2::geom_line(linewidth = 0.75) + ggplot2::geom_point(size = 2) +
+    ggplot2::scale_colour_manual(values = enzyme_palette(ec_levels), drop = FALSE) +
+    ggplot2::scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+    ggplot2::labs(title = title, x = "Sample", y = "TPM", colour = "EC") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+      panel.grid.major.x = ggplot2::element_blank(), panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold"), legend.position = "right",
+      legend.title = ggplot2::element_text(face = "bold")
+    )
+}
+
 render_enzymes <- function(table, context, dimensions, plot_types = c("bar", "line")) {
   if (!nrow(table)) return(data.frame())
   groups <- c(list(list(name = "enzimi", data = table, directory = file.path(context$output_dir, "funz", "enzimi", "insieme"))),
@@ -847,10 +920,9 @@ render_enzymes <- function(table, context, dimensions, plot_types = c("bar", "li
       "funz", "enzyme_data_tsv", data_path, NA_character_, group$name, context
     )
     for (dimension in dimensions) for (type in intersect(c("bar", "line"), plot_types)) {
-      plot <- ggplot2::ggplot(group$data, ggplot2::aes(sample, tpm, colour = ec_code, fill = ec_code, group = ec_code))
-      if (type == "bar") plot <- plot + ggplot2::geom_col(position = "dodge")
-      else plot <- plot + ggplot2::geom_line() + ggplot2::geom_point()
-      plot <- plot + ggplot2::theme_minimal()
+      scope <- if (group$name == "enzimi") "combined" else paste("EC", group$name)
+      title <- paste(if (type == "bar") "Enzyme barplot" else "Enzyme line chart", scope, sep = " - ")
+      plot <- if (type == "bar") make_enzyme_barplot(group$data, title) else make_enzyme_lineplot(group$data, title)
       path <- save_plot(plot, file.path(group$directory, paste0("enzimi_", type, "_", safe_name(dimension$name), ".png")),
                         dimension$width, dimension$height, dimension$dpi)
       manifests[[length(manifests) + 1L]] <- artifact_manifest(

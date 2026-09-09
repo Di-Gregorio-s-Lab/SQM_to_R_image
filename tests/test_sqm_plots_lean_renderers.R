@@ -7,6 +7,7 @@ need <- function(name) {
   }
   get(name, envir = script_env, inherits = FALSE)
 }
+palette_colors <- get("colors_hex", envir = script_env, inherits = FALSE)
 
 expect_close <- function(actual, expected, label, tolerance = 1e-10) {
   if (!isTRUE(all.equal(actual, expected, tolerance = tolerance))) {
@@ -73,7 +74,7 @@ stopifnot(
   identical(funz_plot$labels$x, "Sample"),
   identical(funz_plot$labels$y, "TPM"),
   identical(funz_plot$labels$fill, "KO / EC | % per sample"),
-  identical(toupper(unname(funz_scale$map("K00001"))), toupper(colors_hex[[1L]])),
+  identical(toupper(unname(funz_scale$map("K00001"))), toupper(palette_colors[[1L]])),
   identical(tolower(unname(funz_scale$map("Other"))), "grey70")
 )
 
@@ -93,7 +94,7 @@ stopifnot(
   identical(enzyme_line$labels$colour, "EC"),
   identical(
     toupper(unname(ggplot2::ggplot_build(enzyme_bar)$plot$scales$get_scales("fill")$map("1.1.1.1"))),
-    toupper(colors_hex[[1L]])
+    toupper(palette_colors[[1L]])
   )
 )
 
@@ -293,14 +294,12 @@ taxonomy_manifest <- need("render_taxonomy")(
   dpi = 72,
   plot_fun = fake_plot_taxonomy
 )
-taxonomy_paths <- assert_renderer(taxonomy_manifest, output_dir, "taxonomy_by_pathway")
-stopifnot(identical(taxonomy_call$rescale, FALSE))
-taxonomy_tsv <- utils::read.delim(
-  taxonomy_paths[grepl("\\.tsv$", taxonomy_paths, ignore.case = TRUE)][[1L]],
-  check.names = FALSE,
-  stringsAsFactors = FALSE
+taxonomy_paths <- artifact_paths(taxonomy_manifest, output_dir)
+stopifnot(
+  identical(taxonomy_call$rescale, FALSE),
+  all(grepl("\\.png$", taxonomy_paths, ignore.case = TRUE)),
+  !file.exists(file.path(dirname(taxonomy_paths[[1L]]), "taxonomy_data.tsv"))
 )
-stopifnot(isTRUE(all.equal(taxonomy_tsv[names(taxonomy_data)], taxonomy_data, check.attributes = FALSE)))
 
 export_call <- NULL
 fake_pathview_export <- function(SQM, pathway_id, count, samples, split_samples,
@@ -330,9 +329,10 @@ stopifnot(
   length(pathview_files) > 0L,
   all(file.info(pathview_files)$size > 0L),
   all(startsWith(pathview_files, paste0(normalizePath(pathview_dir, winslash = "/"), "/"))),
-  !identical(normalizePath(export_call$output_dir, winslash = "/"), normalizePath(pathview_dir, winslash = "/")),
-  !dir.exists(export_call$output_dir),
+  identical(normalizePath(export_call$output_dir, winslash = "/"), normalizePath(pathview_dir, winslash = "/")),
+  dir.exists(export_call$output_dir),
+  !length(list.files(pathview_dir, pattern = "\\.tsv$", recursive = TRUE)),
   identical(export_call$split_samples, FALSE)
 )
 
-message("PASS: lean renderer contracts preserve mass and write isolated artifacts")
+message("PASS: lean renderer contracts preserve TPM, native colors and sidecar-free exports")
