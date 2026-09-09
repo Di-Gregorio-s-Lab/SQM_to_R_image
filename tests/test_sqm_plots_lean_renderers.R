@@ -66,6 +66,37 @@ expect_close(sum(funz$tpm), 150, "FUNZ changed official KO mass")
 expect_close(sum(funz$percent), 100, "FUNZ percentages do not close")
 stopifnot("Other" %in% as.character(funz$ko_id))
 
+funz_plot <- need("make_funz_plot")(funz, "Synthetic pathway")
+funz_scale <- ggplot2::ggplot_build(funz_plot)$plot$scales$get_scales("fill")
+stopifnot(
+  identical(funz_plot$labels$title, "KO barplot - Synthetic pathway"),
+  identical(funz_plot$labels$x, "Sample"),
+  identical(funz_plot$labels$y, "TPM"),
+  identical(funz_plot$labels$fill, "KO / EC | % per sample"),
+  identical(toupper(unname(funz_scale$map("K00001"))), toupper(colors_hex[[1L]])),
+  identical(tolower(unname(funz_scale$map("Other"))), "grey70")
+)
+
+enzyme_style_table <- data.frame(
+  sample = factor(c("S1", "S2"), levels = c("S1", "S2")),
+  ec_code = factor(c("1.1.1.1", "2.2.2.2"), levels = c("1.1.1.1", "2.2.2.2")),
+  tpm = c(10, 20)
+)
+enzyme_bar <- need("make_enzyme_barplot")(enzyme_style_table, "Enzyme barplot - combined")
+enzyme_line <- need("make_enzyme_lineplot")(enzyme_style_table, "Enzyme line chart - combined")
+stopifnot(
+  identical(enzyme_bar$labels$x, "Sample"),
+  identical(enzyme_bar$labels$y, "TPM"),
+  identical(enzyme_bar$labels$fill, "EC"),
+  identical(enzyme_line$labels$x, "Sample"),
+  identical(enzyme_line$labels$y, "TPM"),
+  identical(enzyme_line$labels$colour, "EC"),
+  identical(
+    toupper(unname(ggplot2::ggplot_build(enzyme_bar)$plot$scales$get_scales("fill")$map("1.1.1.1"))),
+    toupper(colors_hex[[1L]])
+  )
+)
+
 allocated_many <- rbind(
   allocated,
   transform(allocated[1L, ], orf_id = "orf5", ko_id = "K00003", tpm = 20,
