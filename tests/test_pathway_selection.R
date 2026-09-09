@@ -22,7 +22,11 @@ stopifnot(identical(
   script_env$pie_pathway_selection_modes("top20", explicitly_requested = TRUE),
   "top20"
 ))
-stopifnot(identical(script_env$default_pathway_ids, script_env$known_pathways$pathway_id))
+stopifnot(
+  "00622" %in% script_env$default_pathway_ids,
+  !"00710" %in% script_env$default_pathway_ids,
+  "00710" %in% script_env$known_pathways$pathway_id
+)
 
 invalid_selection_error <- tryCatch(
   {

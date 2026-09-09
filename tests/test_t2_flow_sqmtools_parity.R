@@ -90,10 +90,10 @@ observed <- flow_rank |>
   dplyr::select(all_of(c("sample", "taxon", "KO", "TPM")))
 
 expected <- tibble::tibble(
-  sample = rep("S1", 3L),
-  taxon = c("Alpha", "Beta", "Alpha"),
-  KO = c("K00001", "K00001", "K00002"),
-  TPM = c(15, 10, 15)
+  sample = rep("S1", 4L),
+  taxon = c("Alpha", "Beta", "Alpha", "Gamma"),
+  KO = c("K00001", "K00001", "K00002", "K99999"),
+  TPM = c(15, 10, 15, 100)
 )
 
 t1_expect_identical(
@@ -119,4 +119,4 @@ t1_expect_identical(
   "FLOW pathway without ortholog nodes must be empty"
 )
 
-message("PASS: FLOW uses pathview KO membership and SQMtools multi-KO TPM semantics")
+message("PASS: FLOW uses every KO and TPM margin from the native pathway subset")
