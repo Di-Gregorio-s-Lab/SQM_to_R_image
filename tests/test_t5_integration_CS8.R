@@ -11,42 +11,21 @@ if (!dir.exists(project_dir)) {
 script_env <- t1_source_sqm_plots_without_main()
 sqm <- script_env$load_sqm_project(project_dir, "prokfilter")
 selected_samples <- c("CS8T0", "CS8T2", "CS8T3", "CS8T4", "CS8T6")
-expected_k01563 <- c(
-  CS8T0 = 20.461747379587,
-  CS8T2 = 64.241150618838,
-  CS8T3 = 48.990246839864,
-  CS8T4 = 111.090699101642,
-  CS8T6 = 38.836884026958
-)
-
-fixture <- t1_read_k01563_fixture()
-fixture_nodes <- fixture[
-  as.character(fixture$pathway_id) == "00361" &
-    as.character(fixture$type) == "ortholog",
-  ,
-  drop = FALSE
-]
-fixture_kos <- unique(unlist(lapply(
-  as.character(fixture_nodes$kegg_names),
-  function(value) {
-    matches <- gregexpr("K[0-9]{5}", value, perl = TRUE)
-    regmatches(value, matches)[[1L]]
-  }
-)))
-t1_expect_identical(
-  fixture_kos,
-  "K01563",
-  "Fixture 00361 no longer identifies only K01563"
+pathway_name <- "Xylene degradation"
+pathway_id <- "00622"
+pathway_sqm <- script_env$subset_pathway(sqm, pathway_name)
+native_tpm <- as.matrix(
+  pathway_sqm$functions$KEGG$tpm[, selected_samples, drop = FALSE]
 )
 
 analysis <- script_env$build_pathway_analysis(
   list(
-    pathway_name = "Chlorocyclohexane and chlorobenzene degradation",
-    pathway_id = "00361",
+    pathway_name = pathway_name,
+    pathway_id = pathway_id,
     pathway_selection = "defined",
-    pathway_sqm = sqm,
+    pathway_sqm = pathway_sqm,
     context_sqm = sqm,
-    pathway_ko_ids = fixture_kos
+    pathway_ko_ids = rownames(native_tpm)
   ),
   selected_samples
 )
@@ -57,6 +36,21 @@ flow_rank <- script_env$build_flow_table_for_rank(
   top_n_taxa = 10L,
   top_n_ko = 20L,
   ko_lookup = analysis$ko_lookup
+)
+
+funz <- script_env$build_ko_plot_table(
+  orf_long = analysis$orf_long_result$data,
+  selected_samples = selected_samples,
+  top_n_ko = 20L,
+  ko_lookup = analysis$ko_lookup,
+  pathway_name = pathway_name
+)
+funz_tpm <- xtabs(tpm ~ ko_id + sample, data = funz)
+t1_expect_equal(
+  unname(funz_tpm[rownames(native_tpm), selected_samples, drop = FALSE]),
+  unname(native_tpm),
+  "CS8 FUNZ margins differ from subsetFun()",
+  tolerance = 1e-8
 )
 
 render_dir <- tempfile("t5_cs8_simple_flow_")
@@ -71,10 +65,34 @@ for (sample_name in selected_samples) {
     sample_name
   )
   flow_before_render <- flow_tbl
+  flow_tpm <- tapply(
+    flow_tbl$TPM,
+    factor(as.character(flow_tbl$KO), levels = rownames(native_tpm)),
+    sum,
+    default = 0
+  )
   t1_expect_equal(
-    sum(flow_tbl$TPM[as.character(flow_tbl$KO) == "K01563"]),
-    unname(expected_k01563[[sample_name]]),
-    paste0("CS8 FLOW K01563 TPM changed for ", sample_name),
+    unname(flow_tpm),
+    unname(native_tpm[, sample_name]),
+    paste0("CS8 FLOW margins differ from subsetFun() for ", sample_name),
+    tolerance = 1e-8
+  )
+  pie_tpm <- vapply(rownames(native_tpm), function(ko_id) {
+    sum(script_env$build_pie_chart_table(
+      orf_long = analysis$orf_long_result$data,
+      sample_name = sample_name,
+      ko_id_filter = ko_id,
+      rank_name = "family",
+      top_n_taxa = 10L,
+      pathway_name = pathway_name,
+      pathway_id = pathway_id,
+      pathway_selection = "defined"
+    )$tpm)
+  }, numeric(1))
+  t1_expect_equal(
+    unname(pie_tpm),
+    unname(native_tpm[, sample_name]),
+    paste0("CS8 PIE margins differ from subsetFun() for ", sample_name),
     tolerance = 1e-8
   )
 
@@ -180,5 +198,5 @@ for (sample_name in selected_samples) {
 }
 
 message(
-  "PASS: CS8 K01563 simple FLOW has aligned PNG geometry and automatic HTML layout"
+  "PASS: CS8 FUNZ/FLOW/PIE match subsetFun(); FLOW rendering is aligned"
 )
