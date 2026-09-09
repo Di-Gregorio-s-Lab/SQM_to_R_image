@@ -3572,8 +3572,7 @@ make_taxonomy_plot <- function(
     rescale = FALSE
   )
 
-  plot_object +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  plot_object
 }
 
 extract_taxonomy_plot_data <- function(plot_object, count) {
@@ -4803,63 +4802,9 @@ run_taxonomy_scope <- function(
         ignore_unmapped = ignore_unmapped,
         ignore_unclassified = ignore_unclassified
       )
-      plot_data <- extract_taxonomy_plot_data(plot_object, count)
-      if (scope_name == "taxonomy_by_pathway") {
-        plot_data <- plot_data |>
-          select(all_of(c("sample", "taxon", "value", "count")))
-      }
-      if (scope_name == "taxonomy_global" && identical(count, "percent")) {
-        taxonomy_context_label <- if (is.na(filtered_taxon)) {
-          "global"
-        } else {
-          paste0(filtered_taxon, "@", filtered_taxon_rank)
-        }
-        plot_data <- add_global_taxonomy_percent_metadata(
-          plot_data = plot_data,
-          sqm_object = sqm_object,
-          rank = rank,
-          selected_samples = selected_samples,
-          context_label = taxonomy_context_label
-        )
-      }
       file_stem <- taxonomy_file_stem(scope_name, count, rank, pathway_name)
       data_file <- file.path(rank_dir, paste0(file_stem, "_data.tsv"))
-      progress_message("TAXON | writing data: ", data_file)
-      data_file <- write_tsv_safe(plot_data, data_file)
-
-      output_manifests$taxon <- bind_rows(
-        output_manifests$taxon,
-        new_manifest_row(
-          script_name = script_name,
-          project_dir = project_dir,
-          tax_mode = tax_mode,
-          pathway = ifelse(is.na(pathway_name), NA_character_, pathway_name),
-          samples = selected_samples,
-          metric = count,
-          top_n_taxa = top_n_taxa,
-          top_n_ko = top_n_ko,
-          output_type = "data_tsv",
-          output_file = relative_to_output(data_file, manifest_base_dir),
-          mode = "taxon",
-          rank = rank,
-          count = count,
-          format = "tsv",
-          dpi = plot_dpi,
-        output_scope = if (
-          is.na(pathway_name)
-        ) scope_label else paste0(scope_label, "_", pathway_selection),
-          filtered_taxon = filtered_taxon,
-          filtered_taxon_rank = filtered_taxon_rank,
-          pathway_id = pathway_id,
-          ko_selection_policy = "not_applicable",
-          taxonomy_display_policy = if (
-            scope_name == "taxonomy_global"
-          ) "SQMtools_non_rescaled_excluding_unmapped_unclassified" else NA_character_,
-          denominator_type = if (
-            scope_name == "taxonomy_global" && identical(count, "percent")
-          ) "total_reads" else NA_character_
-        )
-      )
+      unlink(data_file, force = TRUE)
 
       progress_message(
         "TAXON | saving PNG | scope=", scope_name,
@@ -4904,7 +4849,7 @@ run_taxonomy_scope <- function(
             denominator_type = if (
               scope_name == "taxonomy_global" && identical(count, "percent")
             ) "total_reads" else NA_character_,
-            source_data_file = relative_to_output(data_file, manifest_base_dir)
+            source_data_file = NA_character_
           )
         )
       }
@@ -4948,10 +4893,12 @@ export_pathview_isolated <- function(
     pathway_id,
     selected_samples,
     final_dir) {
-  temporary_dir <- tempfile("sqm_pathview_export_")
-  dir.create(temporary_dir, recursive = TRUE, showWarnings = FALSE)
-  on.exit(unlink(temporary_dir, recursive = TRUE, force = TRUE), add = TRUE)
-  temporary_dir_abs <- normalizePath(temporary_dir, winslash = "/", mustWork = TRUE)
+  dir.create(final_dir, recursive = TRUE, showWarnings = FALSE)
+  unlink(file.path(final_dir, c(
+    "pathview_input_all_ko_complete_matrix.tsv",
+    "pathview_render_config.tsv"
+  )), force = TRUE)
+  final_dir_abs <- normalizePath(final_dir, winslash = "/", mustWork = TRUE)
 
   export_pathway_fn(
     SQM = sqm_object,
@@ -4960,12 +4907,12 @@ export_pathview_isolated <- function(
     samples = selected_samples,
     split_samples = FALSE,
     log_scale = FALSE,
-    output_dir = temporary_dir_abs,
+    output_dir = final_dir_abs,
     output_suffix = paste0("pathview_", pathway_id)
   )
 
   produced_files <- list.files(
-    temporary_dir_abs,
+    final_dir_abs,
     recursive = TRUE,
     full.names = TRUE,
     all.files = FALSE,
@@ -4975,24 +4922,10 @@ export_pathview_isolated <- function(
     stop("Pathview did not produce any output files.", call. = FALSE)
   }
 
-  dir.create(final_dir, recursive = TRUE, showWarnings = FALSE)
-  relative_files <- substring(produced_files, nchar(temporary_dir_abs) + 2L)
-  final_files <- file.path(final_dir, relative_files)
-  for (file_index in seq_along(produced_files)) {
-    dir.create(dirname(final_files[[file_index]]), recursive = TRUE, showWarnings = FALSE)
-    copied <- file.copy(
-      produced_files[[file_index]],
-      final_files[[file_index]],
-      overwrite = TRUE,
-      copy.mode = TRUE,
-      copy.date = TRUE
-    )
-    if (!isTRUE(copied)) {
-      stop("Failed to transfer Pathview artifact: ", relative_files[[file_index]], call. = FALSE)
-    }
-    assert_output_artifact(final_files[[file_index]], "Pathview output")
+  for (output_file in produced_files) {
+    assert_output_artifact(output_file, "Pathview output")
   }
-  sort(final_files)
+  sort(produced_files)
 }
 
 run_pathview_mode <- function(
@@ -5084,49 +5017,10 @@ run_pathview_mode <- function(
         "pathway_", pathway_selection, "_", pathview_sample_mode
       )
 
-      input_table <- build_pathview_input_table(sqm_object, current_samples)
-      input_file <- file.path(pathview_dir, "pathview_input_all_ko_complete_matrix.tsv")
-      config_file <- file.path(pathview_dir, "pathview_render_config.tsv")
-      input_file <- write_tsv_safe(input_table, input_file)
-      config_file <- write_tsv_safe(
-        tibble::tibble(
-          pathway_id = pathway_id,
-          metric = "tpm",
-          samples = paste(current_samples, collapse = ","),
-          pathview_sample_mode = pathview_sample_mode,
-          split_samples = FALSE,
-          log_scale = FALSE,
-          pseudocount = NA_real_,
-          color_bins = 10L,
-          max_scale_value = "automatic",
-          color_source = "pathview_native",
-          input_scope = "complete_all_ko_matrix"
-        ),
-        config_file
-      )
-      input_relative <- relative_to_output(input_file, manifest_base_dir)
-      output_manifests$pathview <- append_pathview_row(
-        output_manifests$pathview,
-        current_samples,
-        "pathview_input_all_ko_complete_matrix_tsv",
-        input_file,
-        output_scope,
-        ko_selection_policy = "all_ko_complete_matrix"
-      )
-      output_manifests$pathview <- append_pathview_row(
-        output_manifests$pathview,
-        current_samples,
-        "pathview_render_config_tsv",
-        config_file,
-        output_scope,
-        source_data_file = input_relative,
-        ko_selection_policy = "all_ko_complete_matrix"
-      )
-
       progress_message(
         "PATHVIEW | mode=", pathview_sample_mode,
         " | samples=", paste(current_samples, collapse = ","),
-        " | isolated export"
+        " | native export"
       )
       produced_files <- tryCatch(
         export_pathview_isolated(
@@ -5153,8 +5047,7 @@ run_pathview_mode <- function(
           current_samples,
           "pathview_file",
           output_file,
-          output_scope,
-          source_data_file = input_relative
+          output_scope
         )
       }
     }
@@ -6171,7 +6064,7 @@ main_impl <- function() {
 
       if (mode %in% c("all", "taxon")) {
           manifests <- run_taxonomy_scope(
-            sqm_object = pathway_analysis$pathway_sqm,
+          sqm_object = pathway_info$pathway_sqm,
             output_dir = context_output_dir,
             manifest_base_dir = context_output_dir,
           output_manifests = manifests,
