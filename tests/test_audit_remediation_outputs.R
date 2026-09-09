@@ -99,7 +99,7 @@ run_case("Pathview isolates each export and manifests exact source data", {
       log_scale = log_scale,
       output_dir = output_dir
     )
-    writeLines("current", file.path(output_dir, "map.png"))
+    writeLines("current", file.path(output_dir, paste0(output_suffix, ".png")))
   }
   result <- script_env$run_pathview_mode(
     sqm_object = pathview_sqm,
@@ -125,25 +125,57 @@ run_case("Pathview isolates each export and manifests exact source data", {
   stopifnot(identical(calls[[2L]]$samples, "S0"))
   stopifnot(identical(calls[[3L]]$samples, "S1"))
   stopifnot(!any(grepl("stale_old", result$pathview$output_file, fixed = TRUE)))
-  input_rows <- result$pathview$output_type == "pathview_input_all_ko_complete_matrix_tsv"
-  stopifnot(sum(input_rows) == 3L)
-  stopifnot(sum(result$pathview$output_type == "pathview_render_config_tsv") == 3L)
   plot_rows <- result$pathview$output_type == "pathview_file"
-  stopifnot(all(!is.na(result$pathview$source_data_file[plot_rows])))
+  stopifnot(nrow(result$pathview) == 3L, all(plot_rows))
+  stopifnot(all(is.na(result$pathview$source_data_file)))
   stopifnot(all(is.na(result$pathview$top_n_ko)))
-  stopifnot(all(result$pathview$ko_selection_policy[input_rows] == "all_ko_complete_matrix"))
   stopifnot(all(result$pathview$ko_selection_policy[plot_rows] == "pathview_native_mapping"))
   stopifnot(all(file.exists(file.path(test_root, result$pathview$output_file))))
+  stopifnot(file.exists(file.path(stale_dir, "stale_old.png")))
+  stopifnot(!length(list.files(
+    file.path(test_root, "pathview"), pattern = "\\.tsv$", recursive = TRUE
+  )))
 
   separate_rows <- result$pathview$output_scope == "pathway_defined_separato" & plot_rows
   stopifnot(setequal(result$pathview$samples[separate_rows], c("S0", "S1")))
-  source_path <- file.path(
-    test_root,
-    result$pathview$output_file[input_rows][[1L]]
+})
+
+run_case("Taxonomy writes only the native plot", {
+  script_env$make_taxonomy_plot <- function(...) {
+    data <- data.frame(item = "Alpha", sample = "S0", abun = 100)
+    ggplot2::ggplot(data, ggplot2::aes(sample, abun, fill = item)) +
+      ggplot2::geom_col()
+  }
+  result <- script_env$run_taxonomy_scope(
+    sqm_object = list(marker = "native subset"),
+    output_dir = test_root,
+    manifest_base_dir = test_root,
+    output_manifests = list(taxon = tibble::tibble()),
+    script_name = "sqm_plots.R",
+    project_dir = "project",
+    tax_mode = "prokfilter",
+    pathway_name = "Synthetic pathway",
+    selected_samples = "S0",
+    dimensions = list("2x2" = c(width = 2, height = 2)),
+    plot_dpi = 72,
+    top_n_taxa = 15L,
+    top_n_ko = 20L,
+    taxonomy_ranks = "phylum",
+    taxonomy_counts = "percent",
+    scope_name = "taxonomy_by_pathway",
+    ignore_unmapped = FALSE,
+    ignore_unclassified = FALSE,
+    pathway_id = "12345"
   )
-  source_data <- readr::read_tsv(source_path, show_col_types = FALSE)
-  stopifnot(identical(source_data$ko_id, c("K00001", "K00002")))
-  stopifnot(identical(source_data$S0, c(10, 20)))
+  stopifnot(
+    nrow(result$taxon) == 1L,
+    identical(result$taxon$output_type, "plot_png"),
+    is.na(result$taxon$source_data_file),
+    !length(list.files(
+      file.path(test_root, "taxonomy_by_pathway"),
+      pattern = "\\.tsv$", recursive = TRUE
+    ))
+  )
 })
 
 run_case("FLOW HTML uses a stable support directory", {
