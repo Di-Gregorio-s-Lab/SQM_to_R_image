@@ -28,11 +28,18 @@ expect_true <- function(condition, label, detail = NULL) {
 }
 
 expected_pathways <- c(
+  "Xylene degradation" = "00622",
   "Carbon fixation in photosynthetic organisms" = "00710",
   "Nitrotoluene degradation" = "00633",
   "Nitrogen metabolism" = "00910"
 )
-legacy_wrong_ids <- c("00622", "00642", "00643")
+legacy_wrong_ids <- c("00642", "00643")
+
+expect_true(
+  "00622" %in% script_env$default_pathway_ids &&
+    !"00710" %in% script_env$default_pathway_ids,
+  "defined defaults select Xylene degradation, not Carbon fixation"
+)
 
 fake_sqm <- list(
   misc = list(KEGG_paths = paste(
