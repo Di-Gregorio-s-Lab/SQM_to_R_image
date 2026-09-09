@@ -1088,15 +1088,17 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
 
 known_pathways <- c(
   `00361` = "Chlorocyclohexane and chlorobenzene degradation",
-  `00710` = "Carbon fixation in photosynthetic organisms",
+  `00622` = "Xylene degradation",
   `00623` = "Toluene degradation",
   `00621` = "Dioxin degradation",
   `00625` = "Chloroalkane and chloroalkene degradation",
   `00630` = "Glyoxylate and dicarboxylate metabolism",
   `00633` = "Nitrotoluene degradation",
   `00910` = "Nitrogen metabolism",
-  `00980` = "Metabolism of xenobiotics by cytochrome P450"
+  `00980` = "Metabolism of xenobiotics by cytochrome P450",
+  `00710` = "Carbon fixation in photosynthetic organisms"
 )
+default_pathway_ids <- setdiff(names(known_pathways), "00710")
 
 default_enzyme_ecs <- c(
   "1.14.12.11", "1.14.12.12", "1.14.12.-", "3.8.1.2", "3.8.1.3", "1.13.11.-",
@@ -1181,7 +1183,7 @@ build_config <- function(args) {
     workers = args$workers %||% default_workers(), plan_only = isTRUE(args$plan_only),
     refresh_kegg = isTRUE(args$refresh_kegg), selection_modes = selection_modes,
     pie_selection_modes = if (is.null(args$pathway_selection_modes)) "defined" else selection_modes,
-    defined_pathways = csv(args$pathways, names(known_pathways)),
+    defined_pathways = csv(args$pathways, default_pathway_ids),
     enzyme_ecs = csv(args$enzyme_ecs, default_enzyme_ecs),
     enzyme_plot_types = enzyme_plot_types
   )

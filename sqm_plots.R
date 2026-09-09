@@ -131,19 +131,20 @@ all_taxonomy_columns <- c(
 # Curated pathway IDs supported by the explicit `defined` selection mode.
 known_pathways <- data.frame(
   pathway_id = c(
-    "00361", "00710", "00623", "00621", "00625",
-    "00630", "00633", "00910", "00980"
+    "00361", "00622", "00623", "00621", "00625",
+    "00630", "00633", "00910", "00980", "00710"
   ),
   canonical_pathway_name = c(
     "Chlorocyclohexane and chlorobenzene degradation",
-    "Carbon fixation in photosynthetic organisms",
+    "Xylene degradation",
     "Toluene degradation",
     "Dioxin degradation",
     "Chloroalkane and chloroalkene degradation",
     "Glyoxylate and dicarboxylate metabolism",
     "Nitrotoluene degradation",
     "Nitrogen metabolism",
-    "Metabolism of xenobiotics by cytochrome P450"
+    "Metabolism of xenobiotics by cytochrome P450",
+    "Carbon fixation in photosynthetic organisms"
   ),
   stringsAsFactors = FALSE
 )
@@ -153,7 +154,7 @@ pathway_name_aliases <- data.frame(
   current_kegg_name = "Other carbon fixation pathways",
   stringsAsFactors = FALSE
 )
-default_pathway_ids <- known_pathways$pathway_id
+default_pathway_ids <- setdiff(known_pathways$pathway_id, "00710")
 default_pathway_selection_modes <- c("defined", "top20")
 default_pathway_top_n <- 20L
 kegg_pathway_roots <- c(
