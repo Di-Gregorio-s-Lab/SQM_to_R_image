@@ -1258,11 +1258,11 @@ build_config <- function(args) {
 
 print_help <- function() cat(
   "Usage: Rscript sqm_plots_lean.R --project_dir PATH --output_dir PATH --mode MODE [options]\n",
-  "Modes: huge (tutto), normal (senza PIE e grafici Top20), oppure: funz,flow,taxon,pie,pathview\n",
-  "Options keep the sqm_plots.R names; additions:\n",
+  "Modes: huge (all outputs), normal (without PIE or Top 20 plots), or: funz,flow,taxon,pie,pathview\n",
+  "Options:\n",
   "  --plan_only       Write contextual top20.tsv files and stop.\n",
   "  --workers=N       Parallel rendering workers; default min(4, physical cores).\n",
-  "  --refresh_kegg    Refresh requested catalog and KGML cache entries.\n",
+  "  --refresh_kegg    Refresh the KEGG pathway catalog cache.\n",
   "  --help, -h        Show this help.\n",
   sep = ""
 )

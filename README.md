@@ -1,56 +1,116 @@
-# Script SqueezeMeta
+# Lean SqueezeMeta plotting pipeline
 
-Pipeline R per produrre grafici funzionali, tassonomici e KEGG da un progetto
-SqueezeMeta.
+`sqm_plots_lean.R` generates functional, taxonomic, flow, pie, enzyme, and KEGG Pathview outputs from a SqueezeMeta project loaded through SQMtools.
 
-## Esecuzione
+The script can run a complete analysis or selected output modes. It validates the command line and the SQM object before rendering, records task errors in a TSV file, and leaves the input project unchanged.
 
-Il punto di ingresso mantenuto è `sqm_plots_lean.R`.
+## Requirements
 
-```powershell
-Rscript sqm_plots_lean.R `
-  --project_dir in/Au_sip `
-  --output_dir out/analisi `
+- R with `Rscript` available on `PATH`
+- A completed SqueezeMeta project that `SQMtools::loadSQM()` can read
+- Internet access on the first run, or an existing KEGG pathway catalog cache
+- The R packages required by the selected mode
+
+Install the CRAN packages with:
+
+```r
+install.packages(c("SQMtools", "ggplot2", "ggalluvial", "plotly", "htmlwidgets"))
+```
+
+Install Pathview from Bioconductor with:
+
+```r
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+BiocManager::install("pathview")
+```
+
+`SQMtools` and `ggplot2` are always checked. FLOW also needs `ggalluvial`; HTML FLOW output needs `plotly` and `htmlwidgets`. Every non-`--plan_only` run currently checks for `pathview`, even when the selected mode does not render pathway maps.
+
+## Basic use
+
+Run the normal profile:
+
+```sh
+Rscript sqm_plots_lean.R \
+  --project_dir /path/to/squeezemeta-project \
+  --output_dir out/analysis \
   --mode normal
 ```
 
-Modalità disponibili:
-
-- `huge`: tutti gli output, inclusi PIE e pathway Top 20;
-- `normal`: FUNZ, ENZIMI, FLOW, TAXON e PATHVIEW sui pathway definiti;
-- `funz`, `flow`, `taxon`, `pie`, `pathview`: esecuzione mirata, anche in una
-  lista separata da virgole.
-
-Usare `Rscript sqm_plots_lean.R --help` per le opzioni essenziali. La
-descrizione completa di default, calcoli e struttura degli output è in
-[`GUIDA_LOGICA_SQM_PLOTS.md`](GUIDA_LOGICA_SQM_PLOTS.md); le regole analitiche
-sono in [`REGOLE_SCRIPT_R_SQUEEZEMETA.md`](REGOLE_SCRIPT_R_SQUEEZEMETA.md).
-
-## Pianificazione rapida
-
-Per validare il progetto e scrivere il ranking dei pathway senza generare
-grafici:
+PowerShell uses backticks for line continuation:
 
 ```powershell
 Rscript sqm_plots_lean.R `
-  --project_dir in/Au_sip `
-  --output_dir out/plan `
-  --mode huge `
+  --project_dir C:/path/to/squeezemeta-project `
+  --output_dir out/analysis `
+  --mode normal
+```
+
+Use `Rscript sqm_plots_lean.R --help` for the short CLI reference. [GUIDE.md](GUIDE.md) documents every option, calculation, and output path.
+
+## Modes
+
+| Mode | Output |
+|---|---|
+| `huge` | FUNZ, enzyme, FLOW, TAXON, PIE, and PATHVIEW outputs |
+| `normal` | FUNZ, enzyme, FLOW, TAXON, and PATHVIEW for the defined pathways |
+| `funz` | KO bar plots and enzyme plots |
+| `flow` | Taxon to KO alluvial PNG and Sankey HTML outputs |
+| `taxon` | Global and pathway-specific taxonomy plots |
+| `pie` | Taxonomic composition pies for each sample and KO |
+| `pathview` | KEGG Pathview exports |
+
+Elementary modes can be combined as a comma-separated list, for example `--mode funz,flow`. The `huge` and `normal` profiles must be used alone.
+
+The values `funz`, `definiti`, `enzimi`, `insieme`, and `separato` are retained in options or output paths for compatibility.
+
+## Plan a run
+
+`--plan_only` validates the project, ranks pathways for each analysis context, writes `top20.tsv`, and stops before rendering:
+
+```sh
+Rscript sqm_plots_lean.R \
+  --project_dir /path/to/squeezemeta-project \
+  --output_dir out/plan \
+  --mode huge \
   --plan_only
 ```
 
-## Test della versione lean
+## Outputs
 
-```powershell
-Get-ChildItem tests/test_sqm_plots_lean*.R | ForEach-Object { Rscript $_.FullName }
+The selected modes write under the requested output directory:
+
+```text
+funz/                 KO and enzyme plots, data, and manifest
+flowplot/             alluvial and Sankey outputs, data, and manifest
+taxonomy_global/      global SQMtools taxonomy plots
+taxonomy_by_pathway/  pathway-specific SQMtools taxonomy plots
+pie/                  taxonomic pie plots, data, and manifest
+pathview/             SQMtools Pathview exports
+top20.tsv              contextual pathway ranking
+errors.tsv             task errors for the completed run
+<run_id>.log           arguments, warnings, errors, and final status
+_cache/kegg/           reusable KEGG pathway catalog cache
 ```
 
-I test lean sono indipendenti dai test storici del vecchio `sqm_plots.R`.
+Existing output directories are not cleared. Files with the same deterministic name may be overwritten, while unrelated files remain in place.
 
-## Struttura
+## Documentation
 
-- `sqm_plots_lean.R` — pipeline corrente;
-- `in/Au_sip/` — dataset SqueezeMeta di prova, da preservare;
-- `out/` — risultati e cache KEGG;
-- `tests/test_sqm_plots_lean*.R` — test mirati della pipeline corrente;
-- `archive/` — script e report storici.
+- [GUIDE.md](GUIDE.md) describes the CLI, data flow, calculations, and generated files.
+
+## Known limitations
+
+- The first run needs access to the KEGG REST API unless the pathway catalog cache already exists.
+- `--refresh_kegg` refreshes the pathway catalog used by the current pipeline. KGML cache helpers exist in the script but do not determine pathway membership.
+- TAXON and PATHVIEW do not produce section manifests.
+- TAXON uses the native `SQMtools::plotTaxonomy()` behavior and produces PNG files without taxonomy sidecar TSV files.
+- The pipeline records independent task failures and exits with status `1` when `errors.tsv` is not empty. Partial outputs remain available.
+
+## License
+
+Copyright 2026 Giacomo Bernabei.
+
+This repository is available under the [PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use is permitted under that license. Commercial use requires a separate agreement with the copyright holder. This is a source-available license, not an OSI-approved open source license.
