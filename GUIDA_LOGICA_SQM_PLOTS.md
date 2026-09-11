@@ -182,18 +182,19 @@ estrae tutti gli ID `Kxxxxx` da `KEGG ID`; per ogni campione:
 
 1. divide il TPM dell'ORF per il numero totale dei KO annotati su quell'ORF;
 2. conserva le quote dei KO presenti nel pathway;
-3. per ogni coppia campione-KO riscalza le quote affinché la loro somma sia
-   uguale al TPM KO ufficiale del subset in `sqm$functions$KEGG$tpm`.
+3. per ogni coppia campione-KO verifica che la somma delle quote coincida con
+   il TPM KO del subset in `sqm$functions$KEGG$tpm` entro la tolleranza `1e-8`.
 
 In formula, per un KO con quote osservate positive:
 
 ```text
-TPM allocato ORF-KO = quota ORF grezza × TPM KO ufficiale / somma quote grezze del KO
+TPM allocato ORF-KO = TPM ORF / numero di KO annotati sull'ORF
 ```
 
-Questa procedura conserva quindi la massa ufficiale di ogni KO, senza
-assegnare l'intero TPM ORF a ogni annotazione. Se un KO ha TPM ufficiale
-positivo ma nessun ORF permette di allocarlo, la preparazione fallisce.
+Lo script non riscalza le quote: SQMtools usa già la stessa ripartizione per
+costruire la matrice funzionale. Una differenza superiore a
+`1e-8 × max(1, TPM KO, somma quote)` fa fallire la preparazione con campione,
+KO, valori osservato/atteso, differenza e fattore diagnostico.
 
 Le tassonomie mancanti diventano `Unclassified`. Nome funzionale ed EC vengono
 da `sqm$misc$KEGG_names`; gli EC sono estratti esclusivamente dal blocco

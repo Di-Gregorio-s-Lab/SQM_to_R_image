@@ -137,7 +137,7 @@ validate_matrix <- function(x, samples, label) {
 }
 
 allocate_ko_tpm <- function(orf_table, orf_tpm, official_ko_tpm,
-                            pathway_ko_ids, samples, tolerance = 1e-8) {
+                            pathway_ko_ids, samples, tolerance = 1e-8, context = "analysis") {
   orf_table <- as.data.frame(orf_table, check.names = FALSE)
   orf_tpm <- validate_matrix(orf_tpm, samples, "ORF TPM")
   official <- validate_matrix(official_ko_tpm, samples, "Official KO TPM")
@@ -172,15 +172,19 @@ allocate_ko_tpm <- function(orf_table, orf_tpm, official_ko_tpm,
     targets <- merge(targets, observed, by = c("sample", "ko_id"), all.x = TRUE, sort = FALSE)
     targets$observed[is.na(targets$observed)] <- 0
   } else targets$observed <- 0
-  bad <- which(targets$target > tolerance & targets$observed <= 0)
-  if (length(bad)) stop("Cannot allocate positive official KO TPM for ",
-                        targets$sample[bad[[1L]]], "/", targets$ko_id[bad[[1L]]], ".", call. = FALSE)
-  scales <- targets[targets$target > 0 & targets$observed > 0, c("sample", "ko_id")]
-  scales$scale <- targets$target[targets$target > 0 & targets$observed > 0] /
-    targets$observed[targets$target > 0 & targets$observed > 0]
-  result <- merge(allocated, scales, by = c("sample", "ko_id"), sort = FALSE)
-  result$tpm <- result$raw_share * result$scale
-  result <- result[c("orf_id", "sample", "ko_id", "tpm")]
+  difference <- abs(targets$target - targets$observed)
+  bad <- which(difference > tolerance * pmax(1, targets$target, targets$observed))
+  if (length(bad)) {
+    row <- bad[[1L]]
+    factor <- if (targets$observed[[row]] > 0) targets$target[[row]] / targets$observed[[row]] else NA_real_
+    stop("KO TPM mismatch [", context, "] at ", targets$sample[[row]], "/", targets$ko_id[[row]],
+         ": observed=", format(targets$observed[[row]], digits = 17),
+         ", target=", format(targets$target[[row]], digits = 17),
+         ", difference=", format(difference[[row]], digits = 17),
+         ", factor=", format(factor, digits = 17), ".", call. = FALSE)
+  }
+  result <- allocated[c("orf_id", "sample", "ko_id", "raw_share")]
+  names(result)[[4L]] <- "tpm"
   rownames(result) <- NULL
   result
 }
@@ -817,10 +821,10 @@ subset_sqm_ids <- function(sqm, orf_ids) {
   subset
 }
 
-prepare_analysis <- function(sqm, pathway_ko_ids, samples) {
+prepare_analysis <- function(sqm, pathway_ko_ids, samples, context = "analysis") {
   allocated <- allocate_ko_tpm(
     sqm$orfs$table, sqm$orfs$tpm, sqm$functions$KEGG$tpm,
-    pathway_ko_ids, samples
+    pathway_ko_ids, samples, context = context
   )
   if (nrow(allocated)) {
     tax <- as.data.frame(sqm$orfs$tax, check.names = FALSE)
@@ -1053,7 +1057,10 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
         ignore_case = FALSE, fixed = TRUE, allow_empty = FALSE
       )
       entry$ko_ids <- rownames(pathway_sqm$functions$KEGG$tpm)
-      entry$analysis <- prepare_analysis(pathway_sqm, entry$ko_ids, config$samples)
+      entry$analysis <- prepare_analysis(
+        pathway_sqm, entry$ko_ids, config$samples,
+        context = paste(key, entry$pathway_name)
+      )
       prepared[[key]] <- entry
     }, error = function(error) {
       errors[[length(errors) + 1L]] <<- data.frame(

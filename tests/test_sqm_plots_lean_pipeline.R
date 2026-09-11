@@ -77,7 +77,7 @@ fake_subset_fun <- function(SQM, fun, ...) {
     subset$orfs[[name]] <- subset$orfs[[name]][ids, , drop = FALSE]
   }
   subset$functions$KEGG$tpm <- if (identical(fun, "First pathway")) {
-    data.frame(S1 = c(50, 20), row.names = c("K00001", "K00002"))
+    data.frame(S1 = c(40, 10), row.names = c("K00001", "K00002"))
   } else {
     data.frame(S1 = 10, row.names = "K00002")
   }
@@ -213,7 +213,7 @@ ko_totals <- function(table) {
   result <- aggregate(table$tpm, list(ko_id = as.character(table$ko_id)), sum)
   stats::setNames(result$x, result$ko_id)
 }
-expected_native_tpm <- c(K00001 = 50, K00002 = 20)
+expected_native_tpm <- c(K00001 = 40, K00002 = 10)
 stopifnot(
   isTRUE(all.equal(ko_totals(funz_data), expected_native_tpm, check.attributes = FALSE)),
   isTRUE(all.equal(ko_totals(flow_data), expected_native_tpm, check.attributes = FALSE)),

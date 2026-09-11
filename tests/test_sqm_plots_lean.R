@@ -79,7 +79,7 @@ orf_tpm <- data.frame(
   check.names = FALSE
 )
 official_ko_tpm <- data.frame(
-  S1 = c(70, 30),
+  S1 = c(35, 15),
   row.names = c("K00001", "K99999"),
   check.names = FALSE
 )
@@ -88,15 +88,41 @@ allocated <- need("allocate_ko_tpm")(
   orf_tpm,
   official_ko_tpm,
   pathway_ko_ids = "K00001",
-  samples = "S1"
+  samples = "S1",
+  context = "defined:00001 Test pathway"
 )
 allocated <- allocated[order(allocated$orf_id), , drop = FALSE]
 stopifnot(
   identical(as.character(allocated$orf_id), c("orf_multi", "orf_single")),
   identical(as.character(allocated$ko_id), c("K00001", "K00001")),
-  isTRUE(all.equal(as.numeric(allocated$tpm), c(30, 40), tolerance = 1e-12)),
-  isTRUE(all.equal(sum(allocated$tpm), 70, tolerance = 1e-12))
+  isTRUE(all.equal(as.numeric(allocated$tpm), c(15, 20), tolerance = 1e-12)),
+  isTRUE(all.equal(sum(allocated$tpm), 35, tolerance = 1e-12))
 )
+
+mismatched_ko_tpm <- official_ko_tpm
+mismatched_ko_tpm["K00001", "S1"] <- 70
+mismatch_error <- tryCatch(
+  need("allocate_ko_tpm")(
+    orf_table, orf_tpm, mismatched_ko_tpm,
+    pathway_ko_ids = "K00001", samples = "S1", context = "defined:00001 Test pathway"
+  ),
+  error = conditionMessage
+)
+stopifnot(
+  grepl("defined:00001 Test pathway", mismatch_error, fixed = TRUE),
+  grepl("S1/K00001", mismatch_error, fixed = TRUE),
+  grepl("observed=35", mismatch_error, fixed = TRUE),
+  grepl("target=70", mismatch_error, fixed = TRUE),
+  grepl("factor=2", mismatch_error, fixed = TRUE)
+)
+
+rounded_ko_tpm <- official_ko_tpm
+rounded_ko_tpm["K00001", "S1"] <- 35 + 1e-8
+rounded <- need("allocate_ko_tpm")(
+  orf_table, orf_tpm, rounded_ko_tpm,
+  pathway_ko_ids = "K00001", samples = "S1", context = "defined:00001 Test pathway"
+)
+stopifnot(isTRUE(all.equal(sum(rounded$tpm), 35, tolerance = 1e-12)))
 
 local({
   output_dir <- tempfile("sqm_plots_lean_")

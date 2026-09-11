@@ -117,7 +117,7 @@ Un confronto dei totali è significativo solo dopo avere verificato i quattro cr
 
 ### Valori KO
 
-Per FUNZ/FLOW/PIE, `allocate_ko_tpm()` parte dal TPM degli ORF, lo divide per il numero di KO annotati nell'ORF e, per ogni coppia KO×campione, applica un fattore che riporta la somma al TPM di `pathway_sqm$functions$KEGG$tpm`. Quando la preparazione riesce, le somme dei flussi/torte per un KO coincidono quindi con quel TPM del sottoinsieme.
+Per FUNZ/FLOW/PIE, `allocate_ko_tpm()` parte dal TPM degli ORF e lo divide per il numero di KO annotati nell'ORF, come fa l'aggregazione funzionale di SQMtools. Per ogni coppia KO×campione verifica poi che la somma coincida con `pathway_sqm$functions$KEGG$tpm`: non applica più alcun fattore correttivo e una differenza oltre la tolleranza produce un errore diagnostico. La controprova su `in/Au_sip` ha coperto 432 pathway e 33.776 fattori definiti: tutti erano esattamente uguali a 1.
 
 Questa conservazione non implica equivalenza con PATHVIEW, perché:
 
