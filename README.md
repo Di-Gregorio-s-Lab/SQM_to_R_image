@@ -1,6 +1,6 @@
 # Lean SqueezeMeta plotting pipeline
 
-`sqm_plots_lean.R` generates functional, taxonomic, flow, pie, enzyme, and KEGG Pathview outputs from a SqueezeMeta project loaded through SQMtools.
+`sqm_plots_lean.R` generates functional, taxonomic, flow, pie, enzyme, KEGG taxa stacked bar, and KEGG Pathview outputs from a SqueezeMeta project loaded through SQMtools.
 
 The script can run a complete analysis or selected output modes. It validates the command line and the SQM object before rendering, records task errors in a TSV file, and leaves the input project unchanged.
 
@@ -54,12 +54,13 @@ Use `Rscript sqm_plots_lean.R --help` for the short CLI reference. [GUIDE.md](GU
 
 | Mode | Output |
 |---|---|
-| `huge` | FUNZ, enzyme, FLOW, TAXON, PIE, and PATHVIEW outputs |
-| `normal` | FUNZ, enzyme, FLOW, TAXON, and PATHVIEW for the defined pathways |
+| `huge` | FUNZ, enzyme, FLOW, TAXON, PIE, KEGG taxa, and PATHVIEW outputs |
+| `normal` | FUNZ, enzyme, FLOW, TAXON, KEGG taxa, and PATHVIEW for the defined pathways |
 | `funz` | KO bar plots and enzyme plots |
 | `flow` | Taxon to KO alluvial PNG and Sankey HTML outputs |
 | `taxon` | Global and pathway-specific taxonomy plots |
 | `pie` | Taxonomic composition pies for each sample and KO |
+| `kegg_taxa` | Stacked TPM bars by pathway, sample, and taxonomy rank, with a per-image TPM legend |
 | `pathview` | KEGG Pathview exports |
 
 Elementary modes can be combined as a comma-separated list, for example `--mode funz,flow`. The `huge` and `normal` profiles must be used alone.
@@ -88,6 +89,7 @@ flowplot/             alluvial and Sankey outputs, data, and manifest
 taxonomy_global/      global SQMtools taxonomy plots
 taxonomy_by_pathway/  pathway-specific SQMtools taxonomy plots
 pie/                  taxonomic pie plots, data, and manifest
+kegg_taxa/            pathway-by-sample stacked taxon TPM plots and TSV data
 pathview/             SQMtools Pathview exports
 top20.tsv              contextual pathway ranking
 errors.tsv             task errors for the completed run
@@ -96,6 +98,8 @@ _cache/kegg/           reusable KEGG pathway catalog cache
 ```
 
 Existing output directories are not cleared. Files with the same deterministic name may be overwritten, while unrelated files remain in place.
+
+KEGG taxa plots select up to 10 classified taxa per pathway and sample bar, each contributing at least 1% of that bar's TPM by default. Taxa selected in any sample of a pathway remain visible in all its samples; remaining classified taxa are grouped as `Other`, and `Unclassified` stays separate. Set `--top_n_kegg_taxa` and `--min_kegg_taxon_percent` to change these limits independently of FLOW and PIE. Each requested dimension produces PNG pages for every taxonomy rank and pathway selection, with a color and TPM legend by pathway and sample on every page. TSV data are saved alongside the PNGs.
 
 ## Documentation
 

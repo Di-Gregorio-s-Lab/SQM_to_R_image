@@ -335,6 +335,62 @@ build_pie_table <- function(allocated, official_totals, samples, ko_id, rank, to
   table
 }
 
+
+build_kegg_taxa_pathway_table <- function(allocated, pathway_id, pathway_name, samples,
+                                          rank, top_n = 10L, min_percent = 1) {
+  data <- as.data.frame(allocated, check.names = FALSE)
+  if (!rank %in% names(data)) {
+    if (nrow(data)) stop("Missing taxonomy rank: ", rank, call. = FALSE)
+    data[[rank]] <- character()
+  }
+  if (length(samples) < 1L || anyDuplicated(samples)) stop("Samples must be unique and nonempty.", call. = FALSE)
+  if (length(top_n) != 1L || is.na(top_n) || top_n < 1L || top_n != as.integer(top_n))
+    stop("top_n must be a positive integer.", call. = FALSE)
+  if (length(min_percent) != 1L || is.na(min_percent) || !is.finite(min_percent) ||
+      min_percent < 0 || min_percent > 100) stop("min_percent must be between 0 and 100.", call. = FALSE)
+  data <- data[data$sample %in% samples & data$tpm > 0, c("sample", rank, "tpm"), drop = FALSE]
+  names(data)[[2L]] <- "taxon"
+  data$taxon <- trimws(as.character(data$taxon))
+  data$taxon[is.na(data$taxon) | !nzchar(data$taxon)] <- "Unclassified"
+  if (any(data$taxon == "Other")) stop("Other is reserved for collapsed taxa.", call. = FALSE)
+  if (nrow(data)) {
+    data <- aggregate(data$tpm, data[c("sample", "taxon")], sum)
+    names(data)[[3L]] <- "tpm"
+  } else data <- data.frame(sample = character(), taxon = character(), tpm = numeric())
+  selected <- character()
+  for (sample in samples) {
+    current <- data[data$sample == sample, , drop = FALSE]
+    total <- sum(current$tpm)
+    candidates <- current[!current$taxon %in% c("Unclassified", "Unmapped") &
+                            current$tpm >= total * min_percent / 100, , drop = FALSE]
+    if (nrow(candidates)) {
+      candidates <- candidates[order(-candidates$tpm, candidates$taxon), , drop = FALSE]
+      selected <- union(selected, head(candidates$taxon, top_n))
+    }
+  }
+  if (nrow(data)) {
+    data$taxon[!data$taxon %in% c(selected, "Unclassified", "Unmapped")] <- "Other"
+    data <- aggregate(data$tpm, data[c("sample", "taxon")], sum)
+    names(data)[[3L]] <- "tpm"
+  }
+  taxa <- unique(c(sort(selected), intersect(c("Unclassified", "Unmapped", "Other"), data$taxon)))
+  if (!length(taxa)) taxa <- "Other"
+  complete <- expand.grid(sample = samples, taxon = taxa, stringsAsFactors = FALSE)
+  data <- merge(complete, data, by = c("sample", "taxon"), all.x = TRUE, sort = FALSE)
+  data$tpm[is.na(data$tpm)] <- 0
+  totals <- aggregate(data$tpm, list(sample = data$sample), sum)
+  names(totals)[[2L]] <- "pathway_tpm"
+  data <- merge(data, totals, by = "sample", sort = FALSE)
+  data$percent <- ifelse(data$pathway_tpm > 0, 100 * data$tpm / data$pathway_tpm, 0)
+  data$pathway_id <- as.character(pathway_id)
+  data$pathway_name <- as.character(pathway_name)
+  data$rank <- rank
+  data <- data[c("pathway_id", "pathway_name", "sample", "taxon", "tpm", "pathway_tpm", "percent", "rank")]
+  data <- data[order(match(data$sample, samples), match(data$taxon, taxa)), , drop = FALSE]
+  rownames(data) <- NULL
+  data
+}
+
 selection_dir <- function(selection) if (identical(selection, "defined")) "definiti" else "top20"
 
 build_flow_color_map <- function(taxon_levels, ko_levels = character()) {
@@ -558,6 +614,164 @@ make_funz_plot <- function(table, pathway_name) {
       legend.key.size = grid::unit(0.55, "lines")
     ) +
     ggplot2::guides(fill = ggplot2::guide_legend(ncol = 1, byrow = TRUE))
+}
+
+
+build_kegg_taxa_color_map <- function(table) {
+  taxa <- sort(setdiff(unique(as.character(table$taxon)), c("Other", "Unclassified", "Unmapped")))
+  base <- unique(colors_hex)
+  extra <- if (length(taxa) > length(base)) {
+    grDevices::hcl.colors(length(taxa) - length(base), palette = "Dynamic")
+  } else character()
+  palette <- stats::setNames(c(base, extra)[seq_along(taxa)], taxa)
+  c(palette,
+    if ("Unmapped" %in% table$taxon) c(Unmapped = "#8a8a8a"),
+    if ("Unclassified" %in% table$taxon) c(Unclassified = "#555555"),
+    if ("Other" %in% table$taxon) c(Other = "#b3b3b3"))
+}
+
+kegg_taxa_sample_groups <- function(samples, width) {
+  columns <- max(1L, floor((width - 3.5) / 1.1))
+  split(samples, ceiling(seq_along(samples) / columns))
+}
+
+kegg_taxa_legend_rows <- function(table, pathway_id, samples, width) {
+  current <- table[table$pathway_id == pathway_id, , drop = FALSE]
+  groups <- length(kegg_taxa_sample_groups(samples, width))
+  1L + groups * (length(unique(current$taxon)) + 1L)
+}
+
+paginate_kegg_taxa <- function(table, samples, width, height) {
+  ids <- unique(as.character(table$pathway_id))
+  if (!length(ids)) return(list())
+  if (!is.finite(width) || width <= 0 || !is.finite(height) || height <= 0)
+    stop("Image dimensions must be positive.", call. = FALSE)
+  max_rows <- max(1L, floor((height - 3.1) / 0.19))
+  max_pathways <- max(1L, floor(width / (1.3 + 0.65 * length(samples))))
+  pages <- list()
+  current <- character()
+  used <- 0L
+  for (id in ids) {
+    needed <- kegg_taxa_legend_rows(table, id, samples, width)
+    if (length(current) && (used + needed > max_rows || length(current) >= max_pathways)) {
+      pages[[length(pages) + 1L]] <- current
+      current <- character()
+      used <- 0L
+    }
+    current <- c(current, id)
+    used <- used + needed
+  }
+  if (length(current)) pages[[length(pages) + 1L]] <- current
+  pages
+}
+
+make_kegg_taxa_plot <- function(table, samples, palette) {
+  ids <- unique(as.character(table$pathway_id))
+  plot_table <- table
+  plot_table$sample <- factor(plot_table$sample, levels = samples)
+  plot_table$pathway_id <- factor(plot_table$pathway_id, levels = ids)
+  plot_table$taxon <- factor(plot_table$taxon, levels = names(palette))
+  ggplot2::ggplot(plot_table, ggplot2::aes(x = sample, y = tpm, fill = taxon)) +
+    ggplot2::geom_col(colour = "grey25", linewidth = 0.15, width = 0.78) +
+    ggplot2::facet_grid(. ~ pathway_id, scales = "free_x", space = "free_x", drop = FALSE) +
+    ggplot2::scale_x_discrete(limits = samples, drop = FALSE) +
+    ggplot2::scale_y_continuous(labels = scales::label_number(big.mark = ",")) +
+    ggplot2::scale_fill_manual(values = palette, drop = FALSE) +
+    ggplot2::labs(title = paste0("KEGG pathway taxonomy - ", unique(table$rank)[[1L]]),
+                  x = "Sample within pathway", y = "TPM") +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 35, hjust = 1),
+                   panel.grid.major.x = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   plot.title = ggplot2::element_text(face = "bold"),
+                   legend.position = "none")
+}
+
+draw_kegg_taxa_legend <- function(table, ids, samples, palette, width, height) {
+  row_height <- 0.19
+  y <- height - 0.15
+  label_width <- min(width * 0.42, width - 1.2)
+  values_width <- width - label_width - 0.2
+  sample_groups <- kegg_taxa_sample_groups(samples, width)
+  fmt <- function(value) formatC(value, digits = 3, format = "fg", flag = "#")
+  for (id in ids) {
+    current <- table[table$pathway_id == id, , drop = FALSE]
+    pathway_name <- unique(current$pathway_name)[[1L]]
+    grid::grid.text(paste0(id, "  ", pathway_name), x = grid::unit(0.12, "in"),
+                    y = grid::unit(y, "in"), just = c("left", "top"),
+                    gp = grid::gpar(fontsize = 9, fontface = "bold"))
+    y <- y - row_height
+    taxa <- unique(as.character(current$taxon))
+    taxa <- taxa[order(match(taxa, names(palette)))]
+    for (group in sample_groups) {
+      grid::grid.text("Taxon", x = grid::unit(0.37, "in"), y = grid::unit(y, "in"),
+                      just = c("left", "top"), gp = grid::gpar(fontsize = 8, fontface = "bold"))
+      for (i in seq_along(group)) {
+        x <- label_width + values_width * (i - 0.5) / length(group)
+        grid::grid.text(group[[i]], x = grid::unit(x, "in"), y = grid::unit(y, "in"),
+                        just = c("centre", "top"), gp = grid::gpar(fontsize = 8, fontface = "bold"))
+      }
+      y <- y - row_height
+      for (taxon in taxa) {
+        grid::grid.rect(x = grid::unit(0.18, "in"), y = grid::unit(y - 0.055, "in"),
+                        width = grid::unit(0.12, "in"), height = grid::unit(0.12, "in"),
+                        just = c("centre", "centre"),
+                        gp = grid::gpar(fill = palette[[taxon]], col = "grey30"))
+        grid::grid.text(taxon, x = grid::unit(0.37, "in"), y = grid::unit(y, "in"),
+                        just = c("left", "top"), gp = grid::gpar(fontsize = 8))
+        for (i in seq_along(group)) {
+          value <- current$tpm[current$sample == group[[i]] & current$taxon == taxon]
+          x <- label_width + values_width * (i - 0.5) / length(group)
+          grid::grid.text(fmt(value), x = grid::unit(x, "in"), y = grid::unit(y, "in"),
+                          just = c("centre", "top"), gp = grid::gpar(fontsize = 8))
+        }
+        y <- y - row_height
+      }
+    }
+  }
+}
+
+save_kegg_taxa_page <- function(table, ids, samples, palette, path, width, height, dpi) {
+  page <- table[table$pathway_id %in% ids, , drop = FALSE]
+  rows <- sum(vapply(ids, function(id) kegg_taxa_legend_rows(page, id, samples, width), integer(1L)))
+  legend_height <- 0.3 + rows * 0.19
+  actual_height <- max(height, legend_height + 3.1)
+  plot_height <- actual_height - legend_height
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  grDevices::png(path, width = width, height = actual_height, units = "in", res = dpi)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  grid::grid.newpage()
+  grid::pushViewport(grid::viewport(layout = grid::grid.layout(
+    2L, 1L, heights = grid::unit(c(plot_height, legend_height), "in")
+  )))
+  grid::pushViewport(grid::viewport(layout.pos.row = 1L))
+  grid::grid.draw(ggplot2::ggplotGrob(make_kegg_taxa_plot(page, samples, palette)))
+  grid::popViewport()
+  grid::pushViewport(grid::viewport(layout.pos.row = 2L))
+  draw_kegg_taxa_legend(page, ids, samples, palette, width, legend_height)
+  grid::popViewport(2L)
+  path
+}
+
+render_kegg_taxa <- function(table, context, rank, samples, dimensions, palette) {
+  directory <- file.path(context$output_dir, "kegg_taxa", selection_dir(context$selection), safe_name(rank))
+  data_path <- write_table(table, file.path(directory, "kegg_taxa_data.tsv"))
+  rows <- list(artifact_manifest("kegg_taxa", "data_tsv", data_path, NA_character_,
+                                 "combined", context, paste(samples, collapse = ","), rank))
+  for (dimension in dimensions) {
+    pages <- paginate_kegg_taxa(table, samples, dimension$width, dimension$height)
+    for (index in seq_along(pages)) {
+      path <- file.path(directory, paste0("kegg_taxa_", safe_name(dimension$name),
+                                           "_page_", sprintf("%02d", index), ".png"))
+      save_kegg_taxa_page(table, pages[[index]], samples, palette, path,
+                          dimension$width, dimension$height, dimension$dpi)
+      rows[[length(rows) + 1L]] <- artifact_manifest(
+        "kegg_taxa", "plot_png", path, NA_character_,
+        paste(pages[[index]], collapse = ","), context, paste(samples, collapse = ","), rank
+      )
+    }
+  }
+  do.call(rbind, rows)
 }
 
 render_funz <- function(table, context, pathway_id, pathway_name, width, height, dpi,
@@ -999,7 +1213,7 @@ render_pathway_mode <- function(task) {
 write_mode_manifest <- function(rows, output_dir, mode) {
   if (!length(rows)) return(NULL)
   table <- deduplicate_manifest(rows)
-  root <- c(funz = "funz", flow = "flowplot", pie = "pie")[[mode]]
+  root <- c(funz = "funz", flow = "flowplot", pie = "pie", kegg_taxa = "kegg_taxa")[[mode]]
   path <- file.path(output_dir, root, paste0("manifest_", mode, ".tsv"))
   table$output_file <- vapply(table$output_file, function(file) {
     root_path <- normalizePath(file.path(output_dir, root), winslash = "/", mustWork = TRUE)
@@ -1071,14 +1285,14 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
   }
 
   mode_list <- if ("huge" %in% config$mode) {
-    c("funz", "flow", "taxon", "pie")
+    c("funz", "flow", "taxon", "pie", "kegg_taxa")
   } else if ("normal" %in% config$mode) {
-    c("funz", "flow", "taxon")
+    c("funz", "flow", "taxon", "kegg_taxa")
   } else {
-    intersect(config$mode, c("funz", "flow", "taxon", "pie"))
+    intersect(config$mode, c("funz", "flow", "taxon", "pie", "kegg_taxa"))
   }
   tasks <- list()
-  for (key in names(prepared)) for (mode in mode_list) {
+  for (key in names(prepared)) for (mode in setdiff(mode_list, "kegg_taxa")) {
     entry <- prepared[[key]]
     if (mode == "pie" && !entry$selection %in% (config$pie_selection_modes %||% selection_modes)) next
     task_context <- context
@@ -1097,12 +1311,50 @@ run_pipeline <- function(sqm, config, catalog, kgml_loader,
     error = completed$errors$error[[row]], stringsAsFactors = FALSE
   )
 
-  manifest_rows <- list(funz = list(), flow = list(), pie = list())
+  manifest_rows <- list(funz = list(), flow = list(), pie = list(), kegg_taxa = list())
   for (id in names(completed$results)) {
     table <- completed$results[[id]]
     if (!is.data.frame(table) || !nrow(table)) next
     mode <- as.character(table$mode[[1L]])
     if (mode %in% names(manifest_rows)) manifest_rows[[mode]][[length(manifest_rows[[mode]]) + 1L]] <- table
+  }
+
+
+  if ("kegg_taxa" %in% mode_list && length(prepared)) {
+    for (rank in config$ranks) {
+      selected_entries <- lapply(c("defined", "top20"), function(selection) {
+        Filter(function(entry) identical(entry$selection, selection), prepared)
+      })
+      names(selected_entries) <- c("defined", "top20")
+      tables <- lapply(selected_entries, function(group) {
+        if (!length(group)) return(NULL)
+        do.call(rbind, lapply(group, function(entry) {
+          build_kegg_taxa_pathway_table(
+            entry$analysis$data, entry$pathway_id, entry$pathway_name,
+            config$samples, rank, config$top_n_kegg_taxa %||% 10L,
+            config$min_kegg_taxon_percent %||% 1
+          )
+        }))
+      })
+      present <- Filter(Negate(is.null), tables)
+      if (!length(present)) next
+      palette <- build_kegg_taxa_color_map(do.call(rbind, present))
+      for (selection in names(tables)) {
+        table <- tables[[selection]]
+        if (is.null(table)) next
+        task_context <- context
+        task_context$selection <- selection
+        tryCatch({
+          rows <- render_kegg_taxa(table, task_context, rank, config$samples,
+                                   config$dimensions, palette)
+          manifest_rows$kegg_taxa[[length(manifest_rows$kegg_taxa) + 1L]] <- rows
+        }, error = function(error) errors[[length(errors) + 1L]] <<- data.frame(
+          task_id = paste(selection, "kegg_taxa", rank, sep = ":"),
+          mode = "kegg_taxa", pathway_id = NA_character_,
+          error = conditionMessage(error), stringsAsFactors = FALSE
+        ))
+      }
+    }
   }
 
   if (any(config$mode %in% c("huge", "normal", "taxon"))) for (count in config$counts) for (rank in config$ranks) for (dimension in config$dimensions) {
@@ -1188,6 +1440,16 @@ positive_integer <- function(value, name, fallback) {
   result
 }
 
+bounded_percent <- function(value, name, fallback) {
+  if (is.null(value)) return(fallback)
+  result <- suppressWarnings(as.numeric(value))
+  if (length(result) != 1L || is.na(result) || !is.finite(result) ||
+      result < 0 || result > 100) {
+    stop(name, " must be between 0 and 100.", call. = FALSE)
+  }
+  result
+}
+
 parse_dimensions_lean <- function(value, dpi) {
   labels <- csv(value, c("12x9", "16x9", "12x16"))
   lapply(labels, function(label) {
@@ -1207,6 +1469,7 @@ build_config <- function(args) {
     "pathway_top_n", "samples", "tax_mode", "top_n_ko", "top_n_taxa", "taxa",
     "taxonomy_ranks", "taxonomy_counts", "flowplot_formats", "pathview_sample_modes",
     "enzyme_ecs", "enzyme_plot_types", "dimensions", "plot_dpi", "workers",
+    "top_n_kegg_taxa", "min_kegg_taxon_percent",
     "plan_only", "refresh_kegg", "help"
   )
   unknown <- setdiff(names(args), allowed)
@@ -1214,7 +1477,7 @@ build_config <- function(args) {
   for (name in c("project_dir", "output_dir", "mode")) {
     if (is.null(args[[name]]) || !nzchar(args[[name]])) stop("Missing --", name, call. = FALSE)
   }
-  modes <- c("huge", "normal", "funz", "flow", "taxon", "pie", "pathview")
+  modes <- c("huge", "normal", "funz", "flow", "taxon", "pie", "pathview", "kegg_taxa")
   selected_modes <- csv(args$mode)
   if (!length(selected_modes) || length(setdiff(selected_modes, modes)) ||
       (any(selected_modes %in% c("huge", "normal")) && length(selected_modes) > 1L)) {
@@ -1247,6 +1510,8 @@ build_config <- function(args) {
     top_n_pathways = positive_integer(args$pathway_top_n, "pathway_top_n", 20L),
     top_n_ko = positive_integer(args$top_n_ko, "top_n_ko", 20L),
     top_n_taxa = positive_integer(args$top_n_taxa, "top_n_taxa", 15L),
+    top_n_kegg_taxa = positive_integer(args$top_n_kegg_taxa, "top_n_kegg_taxa", 10L),
+    min_kegg_taxon_percent = bounded_percent(args$min_kegg_taxon_percent, "min_kegg_taxon_percent", 1),
     workers = args$workers %||% default_workers(), plan_only = isTRUE(args$plan_only),
     refresh_kegg = isTRUE(args$refresh_kegg), selection_modes = selection_modes,
     pie_selection_modes = if (is.null(args$pathway_selection_modes)) "defined" else selection_modes,
@@ -1258,14 +1523,37 @@ build_config <- function(args) {
 
 print_help <- function() cat(
   "Usage: Rscript sqm_plots_lean.R --project_dir PATH --output_dir PATH --mode MODE [options]\n",
-  "Modes: huge (all outputs), normal (without PIE or Top 20 plots), or: funz,flow,taxon,pie,pathview\n",
+  "Modes: huge (all outputs), normal (without PIE or Top 20 plots), or: funz,flow,taxon,pie,pathview,kegg_taxa\n",
   "Options:\n",
   "  --plan_only       Write contextual top20.tsv files and stop.\n",
   "  --workers=N       Parallel rendering workers; default min(4, physical cores).\n",
   "  --refresh_kegg    Refresh the KEGG pathway catalog cache.\n",
+  "  --top_n_kegg_taxa=N  Maximum selected taxa per pathway/sample; default 10.\n",
+  "  --min_kegg_taxon_percent=P  Minimum relative abundance; default 1%.\n",
   "  --help, -h        Show this help.\n",
   sep = ""
 )
+
+
+ensure_sqm_sample_metadata <- function(sqm) {
+  samples <- colnames(sqm$orfs$tpm)
+  if (is.null(samples) || !length(samples) || anyNA(samples) ||
+      any(!nzchar(samples)) || anyDuplicated(samples)) {
+    stop("ORF TPM requires unique named sample columns.", call. = FALSE)
+  }
+  if (!setequal(samples, colnames(sqm$functions$KEGG$tpm))) {
+    stop("ORF and KEGG TPM sample columns disagree.", call. = FALSE)
+  }
+  metadata <- sqm$misc$samples
+  if (!length(metadata)) {
+    misc <- sqm$misc %||% list()
+    misc$samples <- samples
+    sqm$misc <- misc
+  } else if (!setequal(metadata, samples)) {
+    stop("SQM sample metadata disagrees with TPM columns.", call. = FALSE)
+  }
+  sqm
+}
 
 validate_sqm <- function(sqm, samples, ranks) {
   missing <- setdiff(c("table", "tax", "tpm"), names(sqm$orfs))
@@ -1350,6 +1638,7 @@ main_impl <- function(args = commandArgs(trailingOnly = TRUE)) {
     project_path = normalizePath(config$project_dir, winslash = "/", mustWork = TRUE),
     tax_mode = config$tax_mode, trusted_functions_only = FALSE, load_sequences = FALSE
   )
+  sqm <- ensure_sqm_sample_metadata(sqm)
   if (is.null(config$samples)) config$samples <- colnames(sqm$orfs$tpm)
   validate_sqm(sqm, config$samples, config$ranks)
   catalog <- get_kegg_catalog(config$output_dir, config$refresh_kegg, download_catalog)
