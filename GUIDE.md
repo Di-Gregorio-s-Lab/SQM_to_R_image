@@ -38,7 +38,7 @@ Unknown options, missing values, invalid enumerations, and invalid positive inte
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--mode` | required | `huge`, `normal`, or a comma-separated subset of `funz,flow,taxon,pie,pathview` |
+| `--mode` | required | `huge`, `normal`, or a comma-separated subset of `funz,flow,taxon,pie,kegg_taxa,pathview` |
 | `--samples` | all samples | Samples to use, in the given order |
 | `--tax_mode` | `prokfilter` | `loadSQM()` taxonomic filter: `prokfilter`, `allfilter`, or `nofilter` |
 | `--taxa` | none | Taxa to process as separate contexts |
@@ -47,6 +47,8 @@ Unknown options, missing values, invalid enumerations, and invalid positive inte
 | `--pathway_top_n` | `20` | Number of ranked pathways |
 | `--top_n_ko` | `20` | KOs kept as separate categories in FUNZ and FLOW |
 | `--top_n_taxa` | `15` | Taxa kept as separate categories in FLOW and PIE |
+| `--top_n_kegg_taxa` | `10` | Maximum classified taxa selected independently in each KEGG pathway and sample bar |
+| `--min_kegg_taxon_percent` | `1` | Minimum relative contribution, in percent of the pathway and sample TPM, for a classified taxon to be selected in that bar |
 | `--taxonomy_ranks` | `phylum,class,order,family,genus,species` | Taxonomy ranks to render |
 | `--taxonomy_counts` | `abund,percent` | Count types passed to `plotTaxonomy()` |
 | `--flowplot_formats` | `png,html` | FLOW formats |
@@ -59,7 +61,7 @@ Unknown options, missing values, invalid enumerations, and invalid positive inte
 | `--plan_only` | false | Write contextual pathway rankings without rendering |
 | `--refresh_kegg` | false | Refresh the KEGG pathway catalog cache |
 
-`normal` forces pathway selection to `defined`. By default, PIE uses only `defined`, including under `huge`; passing `--pathway_selection_modes` explicitly can include `top20` for PIE.
+`normal` forces pathway selection to `defined`. By default, PIE uses only `defined`, including under `huge`; passing `--pathway_selection_modes` explicitly can include `top20` for PIE. KEGG taxa bar plots use the current pathway selection: `defined` under `normal`, or separate `defined` and `top20` groups when both are selected. The two KEGG taxa selection options are independent of `--top_n_taxa` for FLOW and PIE.
 
 The former `all` and `enzimi` modes are not accepted. Enzyme plots are part of `funz`.
 
@@ -109,7 +111,7 @@ SQMtools::subsetFun(
 )
 ```
 
-The KO row names in the subset's official KEGG TPM matrix define the pathway KOs used by FUNZ, FLOW, and PIE. A pathway that cannot be prepared is added to `errors.tsv`; other tasks continue.
+The KO row names in the subset's official KEGG TPM matrix define the pathway KOs used by FUNZ, FLOW, PIE, and KEGG taxa bar plots. A pathway that cannot be prepared is added to `errors.tsv`; other tasks continue.
 
 ### Top pathways
 
@@ -121,7 +123,7 @@ Every context writes `top20.tsv`. Its columns are `rank`, `pathway_id`, `pathway
 
 ## TPM allocation
 
-FUNZ, FLOW, and PIE share one prepared data table. The script extracts every `Kxxxxx` identifier from each ORF's `KEGG ID` value. For each sample, it divides the ORF TPM equally across all KOs annotated on that ORF, then keeps the shares for KOs in the prepared pathway subset.
+FUNZ, FLOW, PIE, and KEGG taxa bar plots share one prepared data table. The script extracts every `Kxxxxx` identifier from each ORF's `KEGG ID` value. For each sample, it divides the ORF TPM equally across all KOs annotated on that ORF, then keeps the shares for KOs in the prepared pathway subset.
 
 ```text
 allocated ORF-KO TPM = ORF TPM / number of KOs annotated on the ORF
@@ -193,6 +195,22 @@ pie/<definiti|top20>/<pathway>/<sample>/<KO>/<rank>/
 ```
 
 `pct` is a proportion between 0 and 1. Combinations without positive TPM produce no files.
+
+### KEGG taxa stacked bars
+
+The `kegg_taxa` mode renders one stacked bar per pathway and sample, with pathway IDs along the X axis and TPM on the Y axis. Each requested taxonomy rank has its own images. The `defined` and `top20` selections remain separate; all selected samples appear side by side within each pathway.
+
+For each pathway and sample bar, classified taxa are ranked by allocated TPM. Up to `--top_n_kegg_taxa` taxa contributing at least `--min_kegg_taxon_percent` of that bar's total TPM are selected. The union of the taxa selected in any sample of the pathway is displayed in every sample of that pathway, including samples where a selected taxon's contribution is below the threshold. Remaining classified taxa become `Other`; `Unclassified` remains separate. The stacked values sum to each bar's full pathway TPM, including zero-TPM bars.
+
+The same taxon keeps its palette color across pathways and pages of a rank. Every PNG includes a table-like legend with the color, taxon name, and TPM by pathway and sample for the pathways shown on that page. The TSV retains the plotted values for checking the bars and legend.
+
+```text
+kegg_taxa/<definiti|top20>/<rank>/
+  kegg_taxa_data.tsv
+  kegg_taxa_<dimension>_page_<number>.png
+```
+
+The requested `--dimensions` are rendered separately. Pathways are split across numbered PNG pages when the bars and full legend cannot fit legibly. With many samples, the legend repeats taxon rows in blocks of sample columns. A page containing one pathway grows vertically if needed so its legend remains complete. `kegg_taxa/manifest_kegg_taxa.tsv` lists the generated TSV and PNG files.
 
 ### PATHVIEW
 
